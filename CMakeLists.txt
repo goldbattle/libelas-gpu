@@ -7,7 +7,8 @@ project(disparity)
 # SET(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/)
 
 # Include libraries
-#find_package(Eigen3 REQUIRED)
+find_package(CUDA)
+# find_package(Eigen3 REQUIRED)
 # find_package(Boost REQUIRED COMPONENTS system serialization system filesystem thread program_options date_time regex timer chrono)
 # find_package(OpenCV 3 REQUIRED core imgcodecs videoio ximgproc)
 
@@ -32,6 +33,11 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3  -Wall")
 
 
+# Set our nvcc flags
+# http://stackoverflow.com/a/13244930
+set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-gencode arch=compute_20,code=sm_20)
+
+
 # Include our header files
 include_directories(src)
 
@@ -39,18 +45,23 @@ include_directories(src)
 # file(GLOB_RECURSE sources_thirdparty thirdparty/*.cpp)
 
 #####################################
-# Main class files for TOTO
+# Main class files for CPU
 #####################################
 set(sources_cpu
     src/main.cpp
     src/lodepng.cpp
 )
-
-
-
 # Create the main executable, and link libraries
-add_executable(stereo_cpu ${sources_cpu})
+add_executable(cpu_stereo ${sources_cpu})
 
-# Link main libraries
-#target_link_libraries(stereo_cpu ${Boost_LIBRARIES} ${OpenCV_LIBRARIES})
+
+
+#####################################
+# Main class files for GPU
+#####################################
+cuda_compile(sources_gpu src/main.cu)
+
+cuda_add_executable(gpu_test ${sources_gpu})
+
+
 

@@ -321,7 +321,7 @@ void computeDisparityMap(){
             
             dispMapR[x][y] = bestDispR;
             dispMapL[x][y] = bestDispL;
-            printf("(%d,%d) , - R : %d , L : %d \n",x,y,bestDispR,bestDispL);
+            //printf("(%d,%d) , - R : %d , L : %d \n",x,y,bestDispR,bestDispL);
             
         }
     }
