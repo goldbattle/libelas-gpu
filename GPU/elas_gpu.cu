@@ -37,6 +37,15 @@ void ElasGPU::computeDisparity(std::vector<support_pt> p_support,std::vector<tri
   // loop variables
   int32_t c1, c2, c3;
   float plane_a,plane_b,plane_c,plane_d;
+
+
+  // CUDA copy over needed memory information
+  //int32_t* d_P;
+  //float* d_D;
+  //uint8_t* d_I1, d_I2;
+  //cudaMalloc((void**) &d_P, size*sizeof(float));
+  //cudaMemcpy(d_A, h_A, size*sizeof(float), cudaMemcpyHostToDevice);
+
   
   // for all triangles do
   for (uint32_t i=0; i<tri.size(); i++) {
@@ -143,9 +152,9 @@ void ElasGPU::computeDisparity(std::vector<support_pt> p_support,std::vector<tri
     int N = ceil(to_calc.size()/NT) * NT;
     dim3 dimBlock(NT,1,1);
     dim3 dimGrid(max((int)(N/NT),1),1,1);
-    cout << "Cuda Elem Size: " << to_calc.size() << endl;
-    cout << "Cuda Block Size: " << NT << endl;
-    cout << "Cuda Grid Size: " << max((int)(N/NT),1) << endl;
+    // cout << "Cuda Elem Size: " << to_calc.size() << endl;
+    // cout << "Cuda Block Size: " << NT << endl;
+    // cout << "Cuda Grid Size: " << max((int)(N/NT),1) << endl;
 
 
     // Next launch our CUDA kernel
@@ -153,11 +162,45 @@ void ElasGPU::computeDisparity(std::vector<support_pt> p_support,std::vector<tri
     for(size_t j=0; j < to_calc.size(); j++) {
       int u = to_calc.at(j).first;
       int v = to_calc.at(j).second;
+      // CPU Method
       findMatch(u,v,plane_a,plane_b,plane_c,disparity_grid,grid_dims,I1_desc,I2_desc,P,plane_radius,valid,right_image,D);
+      // GPU Method
+      // findMatch<<<dimGrid, dimBlock>>>(u,v,plane_a,plane_b,plane_c,disparity_grid,grid_dims,
+      //                                   d_I1,d_I2,d_P,plane_radius,valid,right_image,d_D);
+      // cudaDeviceSynchronize();
     }
 
     
   }
 
+  // Copy the final disparity values back over
+  // cudaMemcpy(h_C, d_C, size*sizeof(float), cudaMemcpyDeviceToHost);
+
+
+  // Free local memory
   delete[] P;
+
+
+  // Free cuda memory
+  // cudaFree(d_A);
+
+}
+
+
+
+/**
+ * CUDA Kernel for computing the match for a single UV coordinate
+ */
+__device__ void findMatch (int32_t &u,int32_t &v,float &plane_a,float &plane_b,float &plane_c,
+                         int32_t* disparity_grid,int32_t *grid_dims,uint8_t* I1_desc,uint8_t* I2_desc,
+                         int32_t *P,int32_t &plane_radius, bool valid, bool right_image, float* D) {
+
+
+
+
+
+
+
+
+
 }

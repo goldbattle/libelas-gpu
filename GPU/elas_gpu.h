@@ -38,9 +38,9 @@ public:
   //                                     const __m128i &xmm1,__m128i &xmm2,int32_t &val,int32_t &min_val,int32_t &min_d);
   // __device__ void updatePosteriorMinimum (__m128i* I2_block_addr,const int32_t &d,
   //                                     const __m128i &xmm1,__m128i &xmm2,int32_t &val,int32_t &min_val,int32_t &min_d);
-  // __device__ void findMatch (int32_t &u,int32_t &v,float &plane_a,float &plane_b,float &plane_c,
-  //                        int32_t* disparity_grid,int32_t *grid_dims,uint8_t* I1_desc,uint8_t* I2_desc,
-  //                        int32_t *P,int32_t &plane_radius,bool &valid,bool &right_image,float* D);
+  __device__ void findMatch (int32_t &u,int32_t &v,float &plane_a,float &plane_b,float &plane_c,
+                         int32_t* disparity_grid,int32_t *grid_dims,uint8_t* I1_desc,uint8_t* I2_desc,
+                         int32_t *P,int32_t &plane_radius,bool &valid,bool &right_image,float* D);
   void computeDisparity(std::vector<support_pt> p_support,std::vector<triangle> tri,int32_t* disparity_grid,int32_t *grid_dims,
                         uint8_t* I1_desc,uint8_t* I2_desc,bool right_image,float* D);
 
