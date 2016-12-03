@@ -16,8 +16,8 @@ version is called, and such code is run on the CPU.
 
 The key difference is the changing of most of the methods in the ELAS class
 to being virtual. This allows for the sub-classes to override such methods.
-This allows for seemless transition between the GPU and CPU code. Additionally,
-the methods where converted to 
+This allows for seamless transition between the GPU and CPU code. Additionally,
+the methods where converted to public to allow for the testing and comparison of the two methods directly.
 
 ## Building
 

@@ -167,7 +167,7 @@ public:
 // This was originally "private"
 // Was converted to allow sub-classes to call this
 // This assumes the user knows what they are doing
-protected:
+public:
   
   struct support_pt {
     int32_t u;

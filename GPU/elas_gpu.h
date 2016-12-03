@@ -28,7 +28,7 @@ public:
 // This was originally "private"
 // Was converted to allow sub-classes to call this
 // This assumes the user knows what they are doing
-protected:
+public:
 
   // Override super
   void removeInconsistentSupportPoints (int16_t* D_can,int32_t D_can_width,int32_t D_can_height);
