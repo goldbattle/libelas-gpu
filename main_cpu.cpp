@@ -101,15 +101,16 @@ void process (const char* file_1,const char* file_2) {
 
 int main (int argc, char** argv) {
 
-  // run demo
+  // Run the demo
+  // Assume we are running from sub-folder
   if (argc==2 && !strcmp(argv[1],"demo")) {
-    process("img/cones_left.pgm",   "img/cones_right.pgm");
-    process("img/aloe_left.pgm",    "img/aloe_right.pgm");
-    process("img/raindeer_left.pgm","img/raindeer_right.pgm");
-    process("img/urban1_left.pgm",  "img/urban1_right.pgm");
-    process("img/urban2_left.pgm",  "img/urban2_right.pgm");
-    process("img/urban3_left.pgm",  "img/urban3_right.pgm");
-    process("img/urban4_left.pgm",  "img/urban4_right.pgm");
+    process("../input/cones_left.pgm",   "../input/cones_right.pgm");
+    process("../input/aloe_left.pgm",    "../input/aloe_right.pgm");
+    process("../input/raindeer_left.pgm","../input/raindeer_right.pgm");
+    process("../input/urban1_left.pgm",  "../input/urban1_right.pgm");
+    process("../input/urban2_left.pgm",  "../input/urban2_right.pgm");
+    process("../input/urban3_left.pgm",  "../input/urban3_right.pgm");
+    process("../input/urban4_left.pgm",  "../input/urban4_right.pgm");
     cout << "... done!" << endl;
 
   // compute disparity from input pair

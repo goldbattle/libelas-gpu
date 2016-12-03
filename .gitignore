@@ -1,3 +1,4 @@
 build
 output/*
 !output/.gitkeep
+.vscode
