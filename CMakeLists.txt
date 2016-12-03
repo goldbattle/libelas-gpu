@@ -30,7 +30,7 @@ endif()
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 
 # Enable debug flags
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3  -Wall")
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3  -Wall")
 
 # Enable SSE3 cpu commands
 # If we are on ARM we need to find an alternative

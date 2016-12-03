@@ -925,11 +925,16 @@ void Elas::computeDisparity(vector<support_pt> p_support,vector<triangle> tri,in
         
     // first part (triangle corner A->B)
     if ((int32_t)(A_u)!=(int32_t)(B_u)) {
+      // Starting at A_u loop till the B_u or the end of the image
       for (int32_t u=max((int32_t)A_u,0); u<min((int32_t)B_u,width); u++){
+        // If we are sub-sampling skip every two
         if (!param.subsampling || u%2==0) {
+          // Use linear lines, to get the bounds of where we need to check
           int32_t v_1 = (uint32_t)(AC_a*(float)u+AC_b);
           int32_t v_2 = (uint32_t)(AB_a*(float)u+AB_b);
+          // Loop through these values of v and try to find the match
           for (int32_t v=min(v_1,v_2); v<max(v_1,v_2); v++)
+            // If we are sub-sampling skip every two
             if (!param.subsampling || v%2==0) {
               findMatch(u,v,plane_a,plane_b,plane_c,disparity_grid,grid_dims,
                         I1_desc,I2_desc,P,plane_radius,valid,right_image,D);
