@@ -12,6 +12,12 @@ From there, the GPU cuda implementation of key methods can be found
 in the GPU folder. For methods not implemented on the GPU the CPU
 version is called, and such code is run on the CPU.
 
+## Differences
+
+The key difference is the changing of most of the methods in the ELAS class
+to being virtual. This allows for the sub-classes to override such methods.
+This allows for seemless transition between the GPU and CPU code. Additionally,
+the methods where converted to 
 
 ## Building
 

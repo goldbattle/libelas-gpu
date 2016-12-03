@@ -20,12 +20,12 @@ Street, Fifth Floor, Boston, MA 02110-1301, USA
 */
 
 // Demo program showing how libelas can be used, try "./elas -h" for help
-
 #include <iostream>
 #include "elas.h"
 #include "image.h"
 
 using namespace std;
+
 
 // compute disparities of pgm image input pair file_1, file_2
 void process (const char* file_1,const char* file_2) {
