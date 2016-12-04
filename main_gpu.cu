@@ -16,12 +16,12 @@ void process (const char* file_1,const char* file_2);
 int main(int argc, char** argv) {
 
   // Process example frames
-  process("../input/cones_left.pgm",   "../input/cones_right.pgm");
-  process("../input/aloe_left.pgm",    "../input/aloe_right.pgm");
-  process("../input/raindeer_left.pgm","../input/raindeer_right.pgm");
-  process("../input/urban1_left.pgm",  "../input/urban1_right.pgm");
-  process("../input/urban2_left.pgm",  "../input/urban2_right.pgm");
-  process("../input/urban3_left.pgm",  "../input/urban3_right.pgm");
+  // process("../input/cones_left.pgm",   "../input/cones_right.pgm");
+  // process("../input/aloe_left.pgm",    "../input/aloe_right.pgm");
+  // process("../input/raindeer_left.pgm","../input/raindeer_right.pgm");
+  // process("../input/urban1_left.pgm",  "../input/urban1_right.pgm");
+  // process("../input/urban2_left.pgm",  "../input/urban2_right.pgm");
+  // process("../input/urban3_left.pgm",  "../input/urban3_right.pgm");
   process("../input/urban4_left.pgm",  "../input/urban4_right.pgm");
   cout << "... done!" << endl;
   

@@ -24,7 +24,7 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, int32_t size_va
   
   //TODO: Remove hard code and use param
   bool subsampling = false;
-  bool match_texture = false;
+  bool match_texture = true;
   int32_t grid_size = 20;
 
   // Pixel id
@@ -98,7 +98,7 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, int32_t size_va
         //updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,xmm1,xmm2,val,min_val,min_d);
         val = 0;
         for(int j=0; j<16; j++){
-            val += abs((uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp));
+            val += abs((int32_t)(*(I1_block_addr+j))-(int32_t)(*(I2_line_addr+j+16*u_warp)));
         }
         // xmm2 = _mm_load_si128((__m128i*)(I2_line_addr+16*u_warp));
         // xmm2 = _mm_sad_epu8(xmm1,xmm2);
@@ -117,8 +117,9 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, int32_t size_va
       //   updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,valid?*(P+abs(d_curr-d_plane)):0,xmm1,xmm2,val,min_val,min_d);
       val = 0;
       for(int j=0; j<16; j++){
-          val += abs((uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp) + valid?*(P+abs(d_curr-d_plane)):0);
+          val += abs((int32_t)(*(I1_block_addr+j))-(int32_t)(*(I2_line_addr+j+16*u_warp)));
       }
+      val += valid?*(P+abs(d_curr-d_plane)):0;
       //   xmm2 = _mm_load_si128(I2_block_addr);
       //   xmm2 = _mm_sad_epu8(xmm1,xmm2);
       //   val  = _mm_extract_epi16(xmm2,0)+_mm_extract_epi16(xmm2,4)+w;
@@ -139,7 +140,7 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, int32_t size_va
         //updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,xmm1,xmm2,val,min_val,min_d);
         val = 0;
         for(int j=0; j<16; j++){
-            val += abs((uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp));
+            val += abs((int32_t)(*(I1_block_addr+j))-(int32_t)(*(I2_line_addr+j+16*u_warp)));
         }
         // xmm2 = _mm_load_si128((__m128i*)(I2_line_addr+16*u_warp));
         // xmm2 = _mm_sad_epu8(xmm1,xmm2);
@@ -157,8 +158,9 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, int32_t size_va
       //   updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,valid?*(P+abs(d_curr-d_plane)):0,xmm1,xmm2,val,min_val,min_d);
       val = 0;
       for(int j=0; j<16; j++){
-          val += abs((uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp) + valid?*(P+abs(d_curr-d_plane)):0);
+          val += abs((int32_t)(*(I1_block_addr+j))-(int32_t)(*(I2_line_addr+j+16*u_warp)));
       }
+      val += valid?*(P+abs(d_curr-d_plane)):0;
       //   xmm2 = _mm_load_si128(I2_block_addr);
       //   xmm2 = _mm_sad_epu8(xmm1,xmm2);
       //   val  = _mm_extract_epi16(xmm2,0)+_mm_extract_epi16(xmm2,4)+w;
