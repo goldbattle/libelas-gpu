@@ -8,6 +8,7 @@
 #include <math.h>
 #include <vector>
 #include <cuda.h>
+#include <stdint.h>
 
 #include "elas.h"
 #include "descriptor.h"
@@ -38,12 +39,15 @@ public:
   //                                     const __m128i &xmm1,__m128i &xmm2,int32_t &val,int32_t &min_val,int32_t &min_d);
   // __device__ void updatePosteriorMinimum (__m128i* I2_block_addr,const int32_t &d,
   //                                     const __m128i &xmm1,__m128i &xmm2,int32_t &val,int32_t &min_val,int32_t &min_d);
-  __device__ void findMatch (int32_t &u,int32_t &v,float &plane_a,float &plane_b,float &plane_c,
-                         int32_t* disparity_grid,int32_t *grid_dims,uint8_t* I1_desc,uint8_t* I2_desc,
-                         int32_t *P,int32_t &plane_radius,bool &valid,bool &right_image,float* D);
+  // __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, float plane_a,float plane_b,float plane_c,
+  //                        int32_t* disparity_grid,int32_t *grid_dims,uint8_t* I1_desc,uint8_t* I2_desc,
+  //                        int32_t *P,int32_t plane_radius, int32_t width, int32_t height, bool valid, bool right_image, float* D);
   void computeDisparity(std::vector<support_pt> p_support,std::vector<triangle> tri,int32_t* disparity_grid,int32_t *grid_dims,
                         uint8_t* I1_desc,uint8_t* I2_desc,bool right_image,float* D);
+  
+  // __device__ uint32_t getAddressOffsetImage_GPU (const int32_t& u,const int32_t& v,const int32_t& width);
 
+  // __device__ uint32_t getAddressOffsetGrid_GPU (const int32_t& x,const int32_t& y,const int32_t& d,const int32_t& width,const int32_t& disp_num);
 };
 
 

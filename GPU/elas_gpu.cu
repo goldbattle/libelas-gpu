@@ -2,7 +2,168 @@
 
 using namespace std;
 
+__device__ uint32_t getAddressOffsetImage_GPU (const int32_t& u,const int32_t& v,const int32_t& width) {
+    return v*width+u;
+  }
 
+  __device__ uint32_t getAddressOffsetGrid_GPU (const int32_t& x,const int32_t& y,const int32_t& d,const int32_t& width,const int32_t& disp_num) {
+    return (y*width+x)*disp_num+d;
+  }
+
+/**
+ * CUDA Kernel for computing the match for a single UV coordinate
+ */
+__global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, float plane_a, float plane_b, float plane_c,
+                         int32_t* disparity_grid,int32_t *grid_dims,uint8_t* I1_desc,uint8_t* I2_desc,
+                         int32_t* P, int32_t plane_radius, int32_t width ,int32_t height, bool valid, bool right_image, float* D) {
+ // get image width and height
+  const int32_t disp_num    = grid_dims[0]-1;
+  const int32_t window_size = 2;
+
+  //TODO: Remove hard code and use param
+  bool subsampling = false;
+  bool match_texture = true;
+  int32_t grid_size = 20;
+
+
+  uint32_t u = u_vals[threadIdx.x];
+  uint32_t v = v_vals[threadIdx.x];
+
+  // address of disparity we want to compute
+  uint32_t d_addr;
+  if (subsampling) d_addr = getAddressOffsetImage_GPU(u/2,v/2,width/2);
+  else                   d_addr = getAddressOffsetImage_GPU(u,v,width);
+  
+  // check if u is ok
+  if (u<window_size || u>=width-window_size)
+    return;
+
+  // compute line start address
+  int32_t  line_offset = 16*width*max(min(v,height-3),2);
+  uint8_t *I1_line_addr,*I2_line_addr;
+  if (!right_image) {
+    I1_line_addr = I1_desc+line_offset;
+    I2_line_addr = I2_desc+line_offset;
+  } else {
+    I1_line_addr = I2_desc+line_offset;
+    I2_line_addr = I1_desc+line_offset;
+  }
+
+  // compute I1 block start address
+  uint8_t* I1_block_addr = I1_line_addr+16*u;
+  
+  // does this patch have enough texture?
+  int32_t sum = 0;
+  for (int32_t i=0; i<16; i++)
+    sum += abs((int32_t)(*(I1_block_addr+i))-128);
+  if (sum<match_texture)
+    return;
+
+  // compute disparity, min disparity and max disparity of plane prior
+  int32_t d_plane     = (int32_t)(plane_a*(float)u+plane_b*(float)v+plane_c);
+  int32_t d_plane_min = max(d_plane-plane_radius,0);
+  int32_t d_plane_max = min(d_plane+plane_radius,disp_num-1);
+
+  // get grid pointer
+  int32_t  grid_x    = (int32_t)floor((float)u/(float)grid_size);
+  int32_t  grid_y    = (int32_t)floor((float)v/(float)grid_size);
+  uint32_t grid_addr = getAddressOffsetGrid_GPU(grid_x,grid_y,0,grid_dims[1],grid_dims[0]);  
+  int32_t  num_grid  = *(disparity_grid+grid_addr);
+  int32_t* d_grid    = disparity_grid+grid_addr+1;
+  
+  // loop variables
+  int32_t d_curr, u_warp, val;
+  int32_t min_val = 10000;
+  int32_t min_d   = -1;
+  //__m128i xmm1    = _mm_load_si128((__m128i*)I1_block_addr);
+  //__m128i xmm2;
+
+  // left image
+  if (!right_image) { 
+    for (int32_t i=0; i<num_grid; i++) {
+      d_curr = d_grid[i];
+      if (d_curr<d_plane_min || d_curr>d_plane_max) { //If the current disparity is out of the planes range
+        u_warp = u-d_curr;
+        if (u_warp<window_size || u_warp>=width-window_size)
+          continue;
+        //updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,xmm1,xmm2,val,min_val,min_d);
+        val = 0;
+        for(int j=0; j<16; j++){
+            val += (uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp);
+        }
+        // xmm2 = _mm_load_si128((__m128i*)(I2_line_addr+16*u_warp));
+        // xmm2 = _mm_sad_epu8(xmm1,xmm2);
+        // val  = _mm_extract_epi16(xmm2,0)+_mm_extract_epi16(xmm2,4);
+        if (val<min_val) {
+            min_val = val;
+            min_d   = d_curr;
+        }
+      }
+    }
+    //disparity inside the grid
+    for (d_curr=d_plane_min; d_curr<=d_plane_max; d_curr++) {
+      u_warp = u-d_curr;
+      if (u_warp<window_size || u_warp>=width-window_size)
+        continue;
+      //   updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,valid?*(P+abs(d_curr-d_plane)):0,xmm1,xmm2,val,min_val,min_d);
+      val = 0;
+      for(int j=0; j<16; j++){
+          val += (uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp) + valid?*(P+abs(d_curr-d_plane)):0 ;
+      }
+      //   xmm2 = _mm_load_si128(I2_block_addr);
+      //   xmm2 = _mm_sad_epu8(xmm1,xmm2);
+      //   val  = _mm_extract_epi16(xmm2,0)+_mm_extract_epi16(xmm2,4)+w;
+      if (val<min_val) {
+        min_val = val;
+        min_d   = d_curr;
+      }
+    }
+    
+  // right image
+  } else {
+    for (int32_t i=0; i<num_grid; i++) {
+      d_curr = d_grid[i];
+      if (d_curr<d_plane_min || d_curr>d_plane_max) {
+        u_warp = u+d_curr;
+        if (u_warp<window_size || u_warp>=width-window_size)
+          continue;
+        //updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,xmm1,xmm2,val,min_val,min_d);
+        val = 0;
+        for(int j=0; j<16; j++){
+            val += (uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp);
+        }
+        // xmm2 = _mm_load_si128((__m128i*)(I2_line_addr+16*u_warp));
+        // xmm2 = _mm_sad_epu8(xmm1,xmm2);
+        // val  = _mm_extract_epi16(xmm2,0)+_mm_extract_epi16(xmm2,4);
+        if (val<min_val) {
+            min_val = val;
+            min_d   = d_curr;
+        }
+      }
+    }
+    for (d_curr=d_plane_min; d_curr<=d_plane_max; d_curr++) {
+      u_warp = u+d_curr;
+      if (u_warp<window_size || u_warp>=width-window_size)
+        continue;
+      //   updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,valid?*(P+abs(d_curr-d_plane)):0,xmm1,xmm2,val,min_val,min_d);
+      val = 0;
+      for(int j=0; j<16; j++){
+          val += (uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp) + valid?*(P+abs(d_curr-d_plane)):0;
+      }
+      //   xmm2 = _mm_load_si128(I2_block_addr);
+      //   xmm2 = _mm_sad_epu8(xmm1,xmm2);
+      //   val  = _mm_extract_epi16(xmm2,0)+_mm_extract_epi16(xmm2,4)+w;
+      if (val<min_val) {
+        min_val = val;
+        min_d   = d_curr;
+      }
+    }
+  }
+
+  // set disparity value
+  if (min_d>=0) *(D+d_addr) = min_d; // MAP value (min neg-Log probability)
+  else          *(D+d_addr) = -1;    // invalid disparity
+}
 
 /**
  * This is the core method that computes the disparity of the image
@@ -40,13 +201,27 @@ void ElasGPU::computeDisparity(std::vector<support_pt> p_support,std::vector<tri
 
 
   // CUDA copy over needed memory information
-  //int32_t* d_P;
-  //float* d_D;
-  //uint8_t* d_I1, d_I2;
-  //cudaMalloc((void**) &d_P, size*sizeof(float));
-  //cudaMemcpy(d_A, h_A, size*sizeof(float), cudaMemcpyHostToDevice);
+  // disparity_grid, I1_desc,I2_desc,P,D
+  int32_t* d_disparity_grid, *d_grid_dims;
+  int32_t* d_P;
+  float* d_D;
+  uint8_t* d_I1, *d_I2;
+  //Allocate on global memory
+  cudaMalloc((void**) &d_disparity_grid, grid_dims[0]*grid_dims[1]*grid_dims[2]*sizeof(int32_t));
+  cudaMalloc((void**) &d_P, disp_num*sizeof(int32_t));
+  cudaMalloc((void**) &d_D, width*height*sizeof(float));
+  cudaMalloc((void**) &d_I1, 16*width*height*sizeof(uint8_t)); //Device descriptors
+  cudaMalloc((void**) &d_I2, 16*width*height*sizeof(uint8_t)); //Device descriptors
+  cudaMalloc((void**) &d_grid_dims, 3*sizeof(int32_t)); 
 
-  
+  //Now copy over data
+  cudaMemcpy(d_disparity_grid, disparity_grid, grid_dims[0]*grid_dims[1]*grid_dims[2]*sizeof(int32_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_P, P, disp_num*sizeof(int32_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_D, D, width*height*sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_I1, I1_desc, 16*width*height*sizeof(uint8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_I2, I2_desc, 16*width*height*sizeof(uint8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_grid_dims, grid_dims, 3*sizeof(int32_t), cudaMemcpyHostToDevice); 
+
   // for all triangles do
   for (uint32_t i=0; i<tri.size(); i++) {
     
@@ -145,62 +320,76 @@ void ElasGPU::computeDisparity(std::vector<support_pt> p_support,std::vector<tri
       }
     }
 
+    int size = to_calc.size()*sizeof(int32_t);
+    // Convert vector to array
+    int32_t* u_vals = (int32_t*)malloc(size);
+    int32_t* v_vals = (int32_t*)malloc(size);
 
+    // Save to arrays
+    for(size_t j=0; j < to_calc.size(); j++) {
+      u_vals[j] = to_calc.at(j).first;
+      v_vals[j] = to_calc.at(j).second;
+    }
+
+    // Copy to device code
+    int32_t* d_u_vals, *d_v_vals;
+    cudaMalloc((void**) &d_u_vals, size);
+    cudaMalloc((void**) &d_v_vals, size);
+    cudaMemcpy(d_u_vals, u_vals, size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_v_vals, v_vals, size, cudaMemcpyHostToDevice);
 
     // Calculate size of kernel
-    int NT = 64;
-    int N = ceil(to_calc.size()/NT) * NT;
-    dim3 dimBlock(NT,1,1);
-    dim3 dimGrid(max((int)(N/NT),1),1,1);
-    // cout << "Cuda Elem Size: " << to_calc.size() << endl;
-    // cout << "Cuda Block Size: " << NT << endl;
-    // cout << "Cuda Grid Size: " << max((int)(N/NT),1) << endl;
+    int block_size = 64;
+    int grid_size = 0;
+    //Calculate gridsize (Add 1 if not evenly divided)
+    if(to_calc.size()%block_size == 0){
+        grid_size = ceil(to_calc.size()/block_size);
+    }else{
+        grid_size = ceil(to_calc.size()/block_size) + 1;
+    }
 
+    dim3 DimGrid(grid_size,1,1);
+    dim3 DimBlock(block_size,1,1);
+
+    cout << "Cuda Elem Size: " << to_calc.size() << endl;
+    cout << "Cuda Block Size: " << block_size << endl;
+    cout << "Cuda Grid Size: " << grid_size << endl;
 
     // Next launch our CUDA kernel
     // TODO: Convert this to CUDA kernel
-    for(size_t j=0; j < to_calc.size(); j++) {
-      int u = to_calc.at(j).first;
-      int v = to_calc.at(j).second;
-      // CPU Method
-      findMatch(u,v,plane_a,plane_b,plane_c,disparity_grid,grid_dims,I1_desc,I2_desc,P,plane_radius,valid,right_image,D);
-      // GPU Method
-      // findMatch<<<dimGrid, dimBlock>>>(u,v,plane_a,plane_b,plane_c,disparity_grid,grid_dims,
-      //                                   d_I1,d_I2,d_P,plane_radius,valid,right_image,d_D);
-      // cudaDeviceSynchronize();
-    }
+    // for(size_t j=0; j < to_calc.size(); j++) {
+    //   int u = to_calc.at(j).first;
+    //   int v = to_calc.at(j).second;
+    //   // CPU Method
+    //   findMatch(u,v,plane_a,plane_b,plane_c,disparity_grid,grid_dims,I1_desc,I2_desc,P,plane_radius,valid,right_image,D);
+    // }
 
+    //GPU Method
+    findMatch_GPU<<<DimGrid, DimBlock>>>(d_u_vals,d_v_vals,plane_a,plane_b,plane_c,d_disparity_grid,d_grid_dims,
+                                        d_I1,d_I2,d_P,plane_radius,width,height,valid,right_image,d_D);
+    
+    cudaDeviceSynchronize();
+    cudaFree(d_u_vals);
+    cudaFree(d_v_vals);
     
   }
 
   // Copy the final disparity values back over
-  // cudaMemcpy(h_C, d_C, size*sizeof(float), cudaMemcpyDeviceToHost);
+  
+  cudaMemcpy(disparity_grid, d_disparity_grid, grid_dims[0]*grid_dims[1]*grid_dims[2]*sizeof(int32_t), cudaMemcpyDeviceToHost);
+  cudaMemcpy(D, d_D, width*height*sizeof(float), cudaMemcpyDeviceToHost);
 
-
+  
   // Free local memory
   delete[] P;
 
 
   // Free cuda memory
-  // cudaFree(d_A);
-
-}
-
-
-
-/**
- * CUDA Kernel for computing the match for a single UV coordinate
- */
-__device__ void findMatch (int32_t &u,int32_t &v,float &plane_a,float &plane_b,float &plane_c,
-                         int32_t* disparity_grid,int32_t *grid_dims,uint8_t* I1_desc,uint8_t* I2_desc,
-                         int32_t *P,int32_t &plane_radius, bool valid, bool right_image, float* D) {
-
-
-
-
-
-
-
-
+  cudaFree(d_disparity_grid);
+  cudaFree(d_P);
+  cudaFree(d_D);
+  cudaFree(d_I1);
+  cudaFree(d_I2);
+  cudaFree(d_grid_dims);
 
 }

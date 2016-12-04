@@ -793,13 +793,14 @@ inline void Elas::findMatch(int32_t &u,int32_t &v,float &plane_a,float &plane_b,
   if (!right_image) { 
     for (int32_t i=0; i<num_grid; i++) {
       d_curr = d_grid[i];
-      if (d_curr<d_plane_min || d_curr>d_plane_max) {
+      if (d_curr<d_plane_min || d_curr>d_plane_max) { //If the current disparity is out of the planes range
         u_warp = u-d_curr;
         if (u_warp<window_size || u_warp>=width-window_size)
           continue;
         updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,xmm1,xmm2,val,min_val,min_d);
       }
     }
+    //disparity inside the grid
     for (d_curr=d_plane_min; d_curr<=d_plane_max; d_curr++) {
       u_warp = u-d_curr;
       if (u_warp<window_size || u_warp>=width-window_size)
