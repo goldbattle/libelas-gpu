@@ -46,7 +46,6 @@ public:
                         uint8_t* I1_desc,uint8_t* I2_desc,bool right_image,float* D);
   
   // __device__ uint32_t getAddressOffsetImage_GPU (const int32_t& u,const int32_t& v,const int32_t& width);
-
   // __device__ uint32_t getAddressOffsetGrid_GPU (const int32_t& x,const int32_t& y,const int32_t& d,const int32_t& width,const int32_t& disp_num);
 };
 

@@ -3,36 +3,45 @@
 using namespace std;
 
 __device__ uint32_t getAddressOffsetImage_GPU (const int32_t& u,const int32_t& v,const int32_t& width) {
-    return v*width+u;
-  }
+  return v*width+u;
+}
 
-  __device__ uint32_t getAddressOffsetGrid_GPU (const int32_t& x,const int32_t& y,const int32_t& d,const int32_t& width,const int32_t& disp_num) {
-    return (y*width+x)*disp_num+d;
-  }
+__device__ uint32_t getAddressOffsetGrid_GPU (const int32_t& x,const int32_t& y,const int32_t& d,const int32_t& width,const int32_t& disp_num) {
+  return (y*width+x)*disp_num+d;
+}
 
 /**
  * CUDA Kernel for computing the match for a single UV coordinate
  */
-__global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, float plane_a, float plane_b, float plane_c,
+__global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, int32_t size_vals, float plane_a, float plane_b, float plane_c,
                          int32_t* disparity_grid,int32_t *grid_dims,uint8_t* I1_desc,uint8_t* I2_desc,
                          int32_t* P, int32_t plane_radius, int32_t width ,int32_t height, bool valid, bool right_image, float* D) {
- // get image width and height
+ 
+  // get image width and height
   const int32_t disp_num    = grid_dims[0]-1;
   const int32_t window_size = 2;
 
+  
   //TODO: Remove hard code and use param
   bool subsampling = false;
-  bool match_texture = true;
+  bool match_texture = false;
   int32_t grid_size = 20;
 
+  // Pixel id
+  uint32_t idx = blockDim.x*blockIdx.x + threadIdx.x;
 
-  uint32_t u = u_vals[threadIdx.x];
-  uint32_t v = v_vals[threadIdx.x];
+  // Check that we are in range
+  if(idx >= size_vals)
+    return;
+
+  // Else get our value
+  uint32_t u = u_vals[idx];
+  uint32_t v = v_vals[idx];
 
   // address of disparity we want to compute
   uint32_t d_addr;
   if (subsampling) d_addr = getAddressOffsetImage_GPU(u/2,v/2,width/2);
-  else                   d_addr = getAddressOffsetImage_GPU(u,v,width);
+  else             d_addr = getAddressOffsetImage_GPU(u,v,width);
   
   // check if u is ok
   if (u<window_size || u>=width-window_size)
@@ -89,7 +98,7 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, float plane_a, 
         //updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,xmm1,xmm2,val,min_val,min_d);
         val = 0;
         for(int j=0; j<16; j++){
-            val += (uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp);
+            val += abs((uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp));
         }
         // xmm2 = _mm_load_si128((__m128i*)(I2_line_addr+16*u_warp));
         // xmm2 = _mm_sad_epu8(xmm1,xmm2);
@@ -108,7 +117,7 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, float plane_a, 
       //   updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,valid?*(P+abs(d_curr-d_plane)):0,xmm1,xmm2,val,min_val,min_d);
       val = 0;
       for(int j=0; j<16; j++){
-          val += (uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp) + valid?*(P+abs(d_curr-d_plane)):0 ;
+          val += abs((uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp) + valid?*(P+abs(d_curr-d_plane)):0);
       }
       //   xmm2 = _mm_load_si128(I2_block_addr);
       //   xmm2 = _mm_sad_epu8(xmm1,xmm2);
@@ -130,7 +139,7 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, float plane_a, 
         //updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,xmm1,xmm2,val,min_val,min_d);
         val = 0;
         for(int j=0; j<16; j++){
-            val += (uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp);
+            val += abs((uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp));
         }
         // xmm2 = _mm_load_si128((__m128i*)(I2_line_addr+16*u_warp));
         // xmm2 = _mm_sad_epu8(xmm1,xmm2);
@@ -148,7 +157,7 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, float plane_a, 
       //   updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,valid?*(P+abs(d_curr-d_plane)):0,xmm1,xmm2,val,min_val,min_d);
       val = 0;
       for(int j=0; j<16; j++){
-          val += (uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp) + valid?*(P+abs(d_curr-d_plane)):0;
+          val += abs((uint32_t*)(I1_block_addr+j)-(uint32_t*)(I2_line_addr+j+16*u_warp) + valid?*(P+abs(d_curr-d_plane)):0);
       }
       //   xmm2 = _mm_load_si128(I2_block_addr);
       //   xmm2 = _mm_sad_epu8(xmm1,xmm2);
@@ -339,7 +348,7 @@ void ElasGPU::computeDisparity(std::vector<support_pt> p_support,std::vector<tri
     cudaMemcpy(d_v_vals, v_vals, size, cudaMemcpyHostToDevice);
 
     // Calculate size of kernel
-    int block_size = 64;
+    int block_size = 32;
     int grid_size = 0;
     //Calculate gridsize (Add 1 if not evenly divided)
     if(to_calc.size()%block_size == 0){
@@ -351,9 +360,9 @@ void ElasGPU::computeDisparity(std::vector<support_pt> p_support,std::vector<tri
     dim3 DimGrid(grid_size,1,1);
     dim3 DimBlock(block_size,1,1);
 
-    cout << "Cuda Elem Size: " << to_calc.size() << endl;
-    cout << "Cuda Block Size: " << block_size << endl;
-    cout << "Cuda Grid Size: " << grid_size << endl;
+    // cout << "Cuda Elem Size: " << to_calc.size() << endl;
+    // cout << "Cuda Block Size: " << block_size << endl;
+    // cout << "Cuda Grid Size: " << grid_size << endl;
 
     // Next launch our CUDA kernel
     // TODO: Convert this to CUDA kernel
@@ -365,7 +374,7 @@ void ElasGPU::computeDisparity(std::vector<support_pt> p_support,std::vector<tri
     // }
 
     //GPU Method
-    findMatch_GPU<<<DimGrid, DimBlock>>>(d_u_vals,d_v_vals,plane_a,plane_b,plane_c,d_disparity_grid,d_grid_dims,
+    findMatch_GPU<<<DimGrid, DimBlock>>>(d_u_vals,d_v_vals,to_calc.size(),plane_a,plane_b,plane_c,d_disparity_grid,d_grid_dims,
                                         d_I1,d_I2,d_P,plane_radius,width,height,valid,right_image,d_D);
     
     cudaDeviceSynchronize();
