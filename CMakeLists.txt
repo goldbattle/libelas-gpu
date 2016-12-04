@@ -38,7 +38,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse -msse2 -msse3")
 
 # Set our nvcc flags
 # http://stackoverflow.com/a/13244930
-set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-gencode arch=compute_20,code=sm_20)
+set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -arch sm_20 -gencode arch=compute_20,code=sm_20)
 
 
 # Include our header files
