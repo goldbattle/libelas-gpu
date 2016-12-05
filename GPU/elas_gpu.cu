@@ -87,25 +87,21 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, int32_t size_to
   int32_t d_curr, u_warp, val;
   int32_t min_val = 10000;
   int32_t min_d   = -1;
-  //__m128i xmm1    = _mm_load_si128((__m128i*)I1_block_addr);
-  //__m128i xmm2;
 
   // left image
-  if (!right_image) { 
     for (int32_t i=0; i<num_grid; i++) {
       d_curr = d_grid[i];
       if (d_curr<d_plane_min || d_curr>d_plane_max) { //If the current disparity is out of the planes range
-        u_warp = u-d_curr;
+        u_warp = u-d_curr+2*right_image*d_curr; //uwarp diffe
         if (u_warp<window_size || u_warp>=width-window_size)
           continue;
-        //updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,xmm1,xmm2,val,min_val,min_d);
+        u_warp = 16*u_warp;
         val = 0;
         for(int j=0; j<16; j++){
-            val += abs((int32_t)(*(I1_block_addr+j))-(int32_t)(*(I2_line_addr+j+16*u_warp)));
+            //val += abs((int32_t)(*(I1_block_addr+j))-(int32_t)(*(I2_line_addr+j+16*u_warp)));
+            val = __sad((int)(*(I1_block_addr+j)),(int)(*(I2_line_addr+j+u_warp)),val);
         }
-        // xmm2 = _mm_load_si128((__m128i*)(I2_line_addr+16*u_warp));
-        // xmm2 = _mm_sad_epu8(xmm1,xmm2);
-        // val  = _mm_extract_epi16(xmm2,0)+_mm_extract_epi16(xmm2,4);
+        
         if (val<min_val) {
             min_val = val;
             min_d   = d_curr;
@@ -114,65 +110,21 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, int32_t size_to
     }
     //disparity inside the grid
     for (d_curr=d_plane_min; d_curr<=d_plane_max; d_curr++) {
-      u_warp = u-d_curr;
+            u_warp = u-d_curr+2*right_image*d_curr;
       if (u_warp<window_size || u_warp>=width-window_size)
         continue;
-      //   updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,valid?*(P+abs(d_curr-d_plane)):0,xmm1,xmm2,val,min_val,min_d);
+      u_warp = 16*u_warp;
       val = 0;
       for(int j=0; j<16; j++){
-          val += abs((int32_t)(*(I1_block_addr+j))-(int32_t)(*(I2_line_addr+j+16*u_warp)));
+          //val += abs((int32_t)(*(I1_block_addr+j))-(int32_t)(*(I2_line_addr+j+16*u_warp)));
+          val = __sad((int)(*(I1_block_addr+j)),(int)(*(I2_line_addr+j+u_warp)),val);
       }
       val += valid?*(P+abs(d_curr-d_plane)):0;
-      //   xmm2 = _mm_load_si128(I2_block_addr);
-      //   xmm2 = _mm_sad_epu8(xmm1,xmm2);
-      //   val  = _mm_extract_epi16(xmm2,0)+_mm_extract_epi16(xmm2,4)+w;
       if (val<min_val) {
         min_val = val;
         min_d   = d_curr;
       }
     }
-    
-  // right image
-  } else {
-    for (int32_t i=0; i<num_grid; i++) {
-      d_curr = d_grid[i];
-      if (d_curr<d_plane_min || d_curr>d_plane_max) {
-        u_warp = u+d_curr;
-        if (u_warp<window_size || u_warp>=width-window_size)
-          continue;
-        //updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,xmm1,xmm2,val,min_val,min_d);
-        val = 0;
-        for(int j=0; j<16; j++){
-            val += abs((int32_t)(*(I1_block_addr+j))-(int32_t)(*(I2_line_addr+j+16*u_warp)));
-        }
-        // xmm2 = _mm_load_si128((__m128i*)(I2_line_addr+16*u_warp));
-        // xmm2 = _mm_sad_epu8(xmm1,xmm2);
-        // val  = _mm_extract_epi16(xmm2,0)+_mm_extract_epi16(xmm2,4);
-        if (val<min_val) {
-            min_val = val;
-            min_d   = d_curr;
-        }
-      }
-    }
-    for (d_curr=d_plane_min; d_curr<=d_plane_max; d_curr++) {
-      u_warp = u+d_curr;
-      if (u_warp<window_size || u_warp>=width-window_size)
-        continue;
-      //   updatePosteriorMinimum((__m128i*)(I2_line_addr+16*u_warp),d_curr,valid?*(P+abs(d_curr-d_plane)):0,xmm1,xmm2,val,min_val,min_d);
-      val = 0;
-      for(int j=0; j<16; j++){
-          val += abs((int32_t)(*(I1_block_addr+j))-(int32_t)(*(I2_line_addr+j+16*u_warp)));
-      }
-      val += valid?*(P+abs(d_curr-d_plane)):0;
-      //   xmm2 = _mm_load_si128(I2_block_addr);
-      //   xmm2 = _mm_sad_epu8(xmm1,xmm2);
-      //   val  = _mm_extract_epi16(xmm2,0)+_mm_extract_epi16(xmm2,4)+w;
-      if (val<min_val) {
-        min_val = val;
-        min_d   = d_curr;
-      }
-    }
-  }
 
   // set disparity value
   if (min_d>=0) *(D+d_addr) = min_d; // MAP value (min neg-Log probability)
