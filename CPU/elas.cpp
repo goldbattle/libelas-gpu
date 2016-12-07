@@ -1449,30 +1449,42 @@ void Elas::adaptiveMean (float* D) {
     }
     
   // full resolution: 8 pixel bilateral filter width
+  // D(x) = sum(I(x)*f(I(xi)-I(x))*g(xi-x))/W(x)
+  // W(x) = sum(f(I(xi)-I(x))*g(xi-x))
+  // g(xi-x) = 1
+  // f(I(xi)-I(x)) = 4-(I(xi)-I(x)) if greater than 0, 0 otherwise
   } else {
     
-  
     // horizontal filter
     for (int32_t v=3; v<D_height-3; v++) {
 
-      // init
+      // Preload first 7 pixels in row
       for (int32_t u=0; u<7; u++)
         val[u] = *(D_copy+v*D_width+u);
 
-      // loop
+      // Loop through remainer of the row
       for (int32_t u=7; u<D_width; u++) {
 
-        // set
+        // Current pixel being filtered is middle of our set (3 back)
+        //Note this isn't truely the center since we have 8 for the vestor registers
         float val_curr = *(D_copy+v*D_width+(u-3));
+        // Update the most outdated (farthest away) pixel of our 8
         val[u%8] = *(D_copy+v*D_width+u);
 
-        xval     = _mm_load_ps(val);      
+        //Process first 4 pixels
+        xval     = _mm_load_ps(val);
+        //Subtract the first 4 pixels from the current
         xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        //Apply mask with bitwise and function(xabsmask = 0x7FFFFFFF or all 1's. thus this does nothing)
         xweight1 = _mm_and_ps(xweight1,xabsmask);
+        //4-weight1
         xweight1 = _mm_sub_ps(xconst4,xweight1);
+        //Finds max of 2 values, if xweight1 is negative return 0
         xweight1 = _mm_max_ps(xconst0,xweight1);
+        //currect val*xweight = our factor
         xfactor1 = _mm_mul_ps(xval,xweight1);
 
+        //Process next 4 pixels
         xval     = _mm_load_ps(val+4);      
         xweight2 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
         xweight2 = _mm_and_ps(xweight2,xabsmask);
@@ -1480,12 +1492,15 @@ void Elas::adaptiveMean (float* D) {
         xweight2 = _mm_max_ps(xconst0,xweight2);
         xfactor2 = _mm_mul_ps(xval,xweight2);
 
+        //sum up factor and weight
         xweight1 = _mm_add_ps(xweight1,xweight2);
         xfactor1 = _mm_add_ps(xfactor1,xfactor2);
 
+        //Pull out factor and weight from vector registers
         _mm_store_ps(weight,xweight1);
         _mm_store_ps(factor,xfactor1);
 
+        //Sum it up
         float weight_sum = weight[0]+weight[1]+weight[2]+weight[3];
         float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];
         

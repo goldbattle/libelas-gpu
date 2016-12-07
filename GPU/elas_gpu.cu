@@ -131,6 +131,229 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, int32_t size_to
   else          *(D+d_addr) = -1;    // invalid disparity
 }
 
+// implements approximation to bilateral filtering
+/*__global__ void adaptiveMeanGPU (float* D) {
+  
+  // get disparity image dimensions
+  int32_t D_width          = width;
+  int32_t D_height         = height;
+  if (param.subsampling) {
+    D_width          = width/2;
+    D_height         = height/2;
+  }
+  
+  // allocate temporary memory
+  float* D_copy = (float*)malloc(D_width*D_height*sizeof(float));
+  float* D_tmp  = (float*)malloc(D_width*D_height*sizeof(float));
+  memcpy(D_copy,D,D_width*D_height*sizeof(float));
+  
+  // zero input disparity maps to -10 (this makes the bilateral
+  // weights of all valid disparities to 0 in this region)
+  for (int32_t i=0; i<D_width*D_height; i++) {
+    if (*(D+i)<0) {
+      *(D_copy+i) = -10;
+      *(D_tmp+i)  = -10;
+    }
+  }
+  
+  __m128 xconst0 = _mm_set1_ps(0);
+  __m128 xconst4 = _mm_set1_ps(4);
+  __m128 xval,xweight1,xweight2,xfactor1,xfactor2;
+  
+  float *val     = (float *)_mm_malloc(8*sizeof(float),16);
+  float *weight  = (float*)_mm_malloc(4*sizeof(float),16);
+  float *factor  = (float*)_mm_malloc(4*sizeof(float),16);
+  
+  // set absolute mask
+  __m128 xabsmask = _mm_set1_ps(0x7FFFFFFF);
+  
+  // when doing subsampling: 4 pixel bilateral filter width
+  if (param.subsampling) {
+  
+    // horizontal filter
+    for (int32_t v=3; v<D_height-3; v++) {
+
+      // init
+      for (int32_t u=0; u<3; u++)
+        val[u] = *(D_copy+v*D_width+u);
+
+      // loop
+      for (int32_t u=3; u<D_width; u++) {
+
+        // set
+        float val_curr = *(D_copy+v*D_width+(u-1));
+        val[u%4] = *(D_copy+v*D_width+u);
+
+        xval     = _mm_load_ps(val);      
+        xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        xweight1 = _mm_and_ps(xweight1,xabsmask);
+        xweight1 = _mm_sub_ps(xconst4,xweight1);
+        xweight1 = _mm_max_ps(xconst0,xweight1);
+        xfactor1 = _mm_mul_ps(xval,xweight1);
+
+        _mm_store_ps(weight,xweight1);
+        _mm_store_ps(factor,xfactor1);
+
+        float weight_sum = weight[0]+weight[1]+weight[2]+weight[3];
+        float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];
+        
+        if (weight_sum>0) {
+          float d = factor_sum/weight_sum;
+          if (d>=0) *(D_tmp+v*D_width+(u-1)) = d;
+        }
+      }
+    }
+
+    // vertical filter
+    for (int32_t u=3; u<D_width-3; u++) {
+
+      // init
+      for (int32_t v=0; v<3; v++)
+        val[v] = *(D_tmp+v*D_width+u);
+
+      // loop
+      for (int32_t v=3; v<D_height; v++) {
+
+        // set
+        float val_curr = *(D_tmp+(v-1)*D_width+u);
+        val[v%4] = *(D_tmp+v*D_width+u);
+
+        xval     = _mm_load_ps(val);      
+        xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        xweight1 = _mm_and_ps(xweight1,xabsmask);
+        xweight1 = _mm_sub_ps(xconst4,xweight1);
+        xweight1 = _mm_max_ps(xconst0,xweight1);
+        xfactor1 = _mm_mul_ps(xval,xweight1);
+
+        _mm_store_ps(weight,xweight1);
+        _mm_store_ps(factor,xfactor1);
+
+        float weight_sum = weight[0]+weight[1]+weight[2]+weight[3];
+        float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];
+        
+        if (weight_sum>0) {
+          float d = factor_sum/weight_sum;
+          if (d>=0) *(D+(v-1)*D_width+u) = d;
+        }
+      }
+    }
+    
+  // full resolution: 8 pixel bilateral filter width
+  // D(x) = sum(I(x)*f(I(xi)-I(x))*g(xi-x))/W(x)
+  // W(x) = sum(f(I(xi)-I(x))*g(xi-x))
+  // g(xi-x) = 1
+  // f(I(xi)-I(x)) = 4-(I(xi)-I(x)) if greater than 0, 0 otherwise
+  } else {
+    
+    // horizontal filter
+    for (int32_t v=3; v<D_height-3; v++) {
+
+      // Preload first 7 pixels in row
+      for (int32_t u=0; u<7; u++)
+        val[u] = *(D_copy+v*D_width+u);
+
+      // Loop through remainer of the row
+      for (int32_t u=7; u<D_width; u++) {
+
+        // Current pixel being filtered is middle of our set (3 back)
+        //Note this isn't truely the center since we have 8 for the vestor registers
+        float val_curr = *(D_copy+v*D_width+(u-3));
+        // Update the most outdated (farthest away) pixel of our 8
+        val[u%8] = *(D_copy+v*D_width+u);
+
+        //Process first 4 pixels
+        xval     = _mm_load_ps(val);
+        //Subtract the first 4 pixels from the current
+        xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        //Apply mask with bitwise and function(xabsmask = 0x7FFFFFFF or all 1's. thus this does nothing)
+        xweight1 = _mm_and_ps(xweight1,xabsmask);
+        //4-weight1
+        xweight1 = _mm_sub_ps(xconst4,xweight1);
+        //Finds max of 2 values, if xweight1 is negative return 0
+        xweight1 = _mm_max_ps(xconst0,xweight1);
+        //currect val*xweight = our factor
+        xfactor1 = _mm_mul_ps(xval,xweight1);
+
+        //Process next 4 pixels
+        xval     = _mm_load_ps(val+4);      
+        xweight2 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        xweight2 = _mm_and_ps(xweight2,xabsmask);
+        xweight2 = _mm_sub_ps(xconst4,xweight2);
+        xweight2 = _mm_max_ps(xconst0,xweight2);
+        xfactor2 = _mm_mul_ps(xval,xweight2);
+
+        //sum up factor and weight
+        xweight1 = _mm_add_ps(xweight1,xweight2);
+        xfactor1 = _mm_add_ps(xfactor1,xfactor2);
+
+        //Pull out factor and weight from vector registers
+        _mm_store_ps(weight,xweight1);
+        _mm_store_ps(factor,xfactor1);
+
+        //Sum it up
+        float weight_sum = weight[0]+weight[1]+weight[2]+weight[3];
+        float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];
+        
+        if (weight_sum>0) {
+          float d = factor_sum/weight_sum;
+          if (d>=0) *(D_tmp+v*D_width+(u-3)) = d;
+        }
+      }
+    }
+  
+    // vertical filter
+    for (int32_t u=3; u<D_width-3; u++) {
+
+      // init
+      for (int32_t v=0; v<7; v++)
+        val[v] = *(D_tmp+v*D_width+u);
+
+      // loop
+      for (int32_t v=7; v<D_height; v++) {
+
+        // set
+        float val_curr = *(D_tmp+(v-3)*D_width+u);
+        val[v%8] = *(D_tmp+v*D_width+u);
+
+        xval     = _mm_load_ps(val);      
+        xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        xweight1 = _mm_and_ps(xweight1,xabsmask);
+        xweight1 = _mm_sub_ps(xconst4,xweight1);
+        xweight1 = _mm_max_ps(xconst0,xweight1);
+        xfactor1 = _mm_mul_ps(xval,xweight1);
+
+        xval     = _mm_load_ps(val+4);      
+        xweight2 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        xweight2 = _mm_and_ps(xweight2,xabsmask);
+        xweight2 = _mm_sub_ps(xconst4,xweight2);
+        xweight2 = _mm_max_ps(xconst0,xweight2);
+        xfactor2 = _mm_mul_ps(xval,xweight2);
+
+        xweight1 = _mm_add_ps(xweight1,xweight2);
+        xfactor1 = _mm_add_ps(xfactor1,xfactor2);
+
+        _mm_store_ps(weight,xweight1);
+        _mm_store_ps(factor,xfactor1);
+
+        float weight_sum = weight[0]+weight[1]+weight[2]+weight[3];
+        float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];
+        
+        if (weight_sum>0) {
+          float d = factor_sum/weight_sum;
+          if (d>=0) *(D+(v-3)*D_width+u) = d;
+        }
+      }
+    }
+  }
+  
+  // free memory
+  _mm_free(val);
+  _mm_free(weight);
+  _mm_free(factor);
+  free(D_copy);
+  free(D_tmp);
+}*/
+
 /**
  * This is the core method that computes the disparity of the image
  * It processes each triangle, so we create a kernel and have each thread
@@ -405,4 +628,254 @@ void ElasGPU::computeDisparity(std::vector<support_pt> p_support, std::vector<tr
   cudaFree(d_u_vals);
   cudaFree(d_v_vals);
 
+}
+
+// implements approximation to bilateral filtering
+void ElasGPU::adaptiveMean (float* D) {
+  
+  // get disparity image dimensions
+  int32_t D_width          = width;
+  int32_t D_height         = height;
+  if (param.subsampling) {
+    D_width          = width/2;
+    D_height         = height/2;
+  }
+  
+  // allocate temporary memory
+  float* D_copy = (float*)malloc(D_width*D_height*sizeof(float));
+  float* D_tmp  = (float*)malloc(D_width*D_height*sizeof(float));
+  memcpy(D_copy,D,D_width*D_height*sizeof(float));
+  
+  // zero input disparity maps to -10 (this makes the bilateral
+  // weights of all valid disparities to 0 in this region)
+  for (int32_t i=0; i<D_width*D_height; i++) {
+    if (*(D+i)<0) {
+      *(D_copy+i) = -10;
+      *(D_tmp+i)  = -10;
+    }
+  }
+  
+  __m128 xconst0 = _mm_set1_ps(0);
+  __m128 xconst4 = _mm_set1_ps(4);
+  __m128 xval,xweight1,xweight2,xfactor1,xfactor2;
+  
+  float *val     = (float *)_mm_malloc(8*sizeof(float),16);
+  float *weight  = (float*)_mm_malloc(4*sizeof(float),16);
+  float *factor  = (float*)_mm_malloc(4*sizeof(float),16);
+  
+  // set bitwise absolute value mask
+  __m128 xabsmask = _mm_set1_ps(0x7FFFFFFF);
+  
+  // when doing subsampling: 4 pixel bilateral filter width
+  if (param.subsampling) {
+  
+    // horizontal filter
+    for (int32_t v=3; v<D_height-3; v++) {
+
+      // init
+      for (int32_t u=0; u<3; u++)
+        val[u] = *(D_copy+v*D_width+u);
+
+      // loop
+      for (int32_t u=3; u<D_width; u++) {
+
+        // set
+        float val_curr = *(D_copy+v*D_width+(u-1));
+        val[u%4] = *(D_copy+v*D_width+u);
+
+        xval     = _mm_load_ps(val);      
+        xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        xweight1 = _mm_and_ps(xweight1,xabsmask);
+        xweight1 = _mm_sub_ps(xconst4,xweight1);
+        xweight1 = _mm_max_ps(xconst0,xweight1);
+        xfactor1 = _mm_mul_ps(xval,xweight1);
+
+        _mm_store_ps(weight,xweight1);
+        _mm_store_ps(factor,xfactor1);
+
+        float weight_sum = weight[0]+weight[1]+weight[2]+weight[3];
+        float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];
+        
+        if (weight_sum>0) {
+          float d = factor_sum/weight_sum;
+          if (d>=0) *(D_tmp+v*D_width+(u-1)) = d;
+        }
+      }
+    }
+
+    // vertical filter
+    for (int32_t u=3; u<D_width-3; u++) {
+
+      // init
+      for (int32_t v=0; v<3; v++)
+        val[v] = *(D_tmp+v*D_width+u);
+
+      // loop
+      for (int32_t v=3; v<D_height; v++) {
+
+        // set
+        float val_curr = *(D_tmp+(v-1)*D_width+u);
+        val[v%4] = *(D_tmp+v*D_width+u);
+
+        xval     = _mm_load_ps(val);      
+        xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        xweight1 = _mm_and_ps(xweight1,xabsmask);
+        xweight1 = _mm_sub_ps(xconst4,xweight1);
+        xweight1 = _mm_max_ps(xconst0,xweight1);
+        xfactor1 = _mm_mul_ps(xval,xweight1);
+
+        _mm_store_ps(weight,xweight1);
+        _mm_store_ps(factor,xfactor1);
+
+        float weight_sum = weight[0]+weight[1]+weight[2]+weight[3];
+        float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];
+        
+        if (weight_sum>0) {
+          float d = factor_sum/weight_sum;
+          if (d>=0) *(D+(v-1)*D_width+u) = d;
+        }
+      }
+    }
+    
+  // full resolution: 8 pixel bilateral filter width
+  // D(x) = sum(I(x)*f(I(xi)-I(x))*g(xi-x))/W(x)
+  // W(x) = sum(f(I(xi)-I(x))*g(xi-x))
+  // g(xi-x) = 1
+  // f(I(xi)-I(x)) = 1-(I(xi)-I(x)) if greater than 0, 0 otherwise
+  } else {
+    
+    // horizontal filter
+    for (int32_t v=3; v<D_height-3; v++) {
+
+      // Preload first 7 pixels in row
+      for (int32_t u=0; u<7; u++)
+        val[u] = *(D_copy+v*D_width+u);
+
+      // Loop through remainer of the row
+      for (int32_t u=7; u<D_width; u++) {
+
+        // Current pixel being filtered is middle of our set (4 back, in orginal its 3 for some reason)
+        //Note this isn't truely the center since we have 8 for the vestor registers
+        float val_curr = *(D_copy+v*D_width+(u-4));
+        // Update the most outdated (farthest away) pixel of our 8
+        val[u%8] = *(D_copy+v*D_width+u);
+
+        float weight_sum0 = 0;
+        float weight_sum = 0;
+        float factor_sum = 0;
+
+        for(int32_t i=0; i < 8; i++){
+            weight_sum0 = 4.0 - std::abs(val[i]-val_curr);
+            weight_sum0 = max(weight_sum0, 0.0);
+            weight_sum += weight_sum0;
+            factor_sum += val_curr*weight_sum0;
+        }
+        
+        //Process first 4 pixels
+        /*xval     = _mm_load_ps(val);
+        //Subtract the first 4 pixels from the current
+        xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        //Apply mask with bitwise and function
+        // (xabsmask = 0x7FFFFFFF or all 1's  except for sign bit) thus acts as absolute value
+        //Mask UNSAFE use alternative
+        //xweight1 = _mm_and_ps(xweight1,xabsmask);
+        xweight1 = _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), xweight1), xweight1);
+        //4-weight1
+        xweight1 = _mm_sub_ps(xconst4,xweight1);
+        //Finds max of 2 values, if xweight1 is negative return 0
+        xweight1 = _mm_max_ps(xconst0,xweight1);
+        //currect val*xweight = our factor
+        xfactor1 = _mm_mul_ps(xval,xweight1);
+
+        //Process next 4 pixels
+        xval     = _mm_load_ps(val+4);      
+        xweight2 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        //Mask UNSAFE use alternative
+        //xweight2 = _mm_and_ps(xweight2,xabsmask);
+        xweight2 = _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), xweight2), xweight2);
+        xweight2 = _mm_sub_ps(xconst4,xweight2);
+        xweight2 = _mm_max_ps(xconst0,xweight2);
+        xfactor2 = _mm_mul_ps(xval,xweight2);
+
+        //sum up factor and weight
+        xweight1 = _mm_add_ps(xweight1,xweight2);
+        xfactor1 = _mm_add_ps(xfactor1,xfactor2);
+
+        //Pull out factor and weight from vector registers
+        _mm_store_ps(weight,xweight1);
+        _mm_store_ps(factor,xfactor1);
+
+        //Sum it up
+        float weight_sum = weight[0]+weight[1]+weight[2]+weight[3];
+        float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];*/
+        
+        if (weight_sum>0) {
+          float d = factor_sum/weight_sum;
+          if (d>=0) *(D_tmp+v*D_width+(u-3)) = d;
+        }
+      }
+    }
+  
+    // vertical filter
+    for (int32_t u=3; u<D_width-3; u++) {
+
+      // init
+      for (int32_t v=0; v<7; v++)
+        val[v] = *(D_tmp+v*D_width+u);
+
+      // loop
+      for (int32_t v=7; v<D_height; v++) {
+
+        // set
+        float val_curr = *(D_tmp+(v-4)*D_width+u);
+        val[v%8] = *(D_tmp+v*D_width+u);
+
+        float weight_sum0 = 0;
+        float weight_sum = 0;
+        float factor_sum = 0;
+
+        for(int32_t i=0; i < 8; i++){
+            weight_sum0 = 4.0 - std::abs(val[i]-val_curr);
+            weight_sum0 = max(weight_sum0, 0.0);
+            weight_sum += weight_sum0;
+            factor_sum += val_curr*weight_sum0;
+        }
+
+        /*xval     = _mm_load_ps(val);      
+        xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        xweight1 = _mm_and_ps(xweight1,xabsmask);
+        xweight1 = _mm_sub_ps(xconst4,xweight1);
+        xweight1 = _mm_max_ps(xconst0,xweight1);
+        xfactor1 = _mm_mul_ps(xval,xweight1);
+
+        xval     = _mm_load_ps(val+4);      
+        xweight2 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
+        xweight2 = _mm_and_ps(xweight2,xabsmask);
+        xweight2 = _mm_sub_ps(xconst4,xweight2);
+        xweight2 = _mm_max_ps(xconst0,xweight2);
+        xfactor2 = _mm_mul_ps(xval,xweight2);
+
+        xweight1 = _mm_add_ps(xweight1,xweight2);
+        xfactor1 = _mm_add_ps(xfactor1,xfactor2);
+
+        _mm_store_ps(weight,xweight1);
+        _mm_store_ps(factor,xfactor1);
+
+        float weight_sum = weight[0]+weight[1]+weight[2]+weight[3];
+        float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];*/
+        
+        if (weight_sum>0) {
+          float d = factor_sum/weight_sum;
+          if (d>=0) *(D+(v-3)*D_width+u) = d;
+        }
+      }
+    }
+  }
+  
+  // free memory
+  _mm_free(val);
+  _mm_free(weight);
+  _mm_free(factor);
+  free(D_copy);
+  free(D_tmp);
 }
