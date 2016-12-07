@@ -1473,18 +1473,12 @@ void Elas::adaptiveMean (float* D) {
 
         //Process first 4 pixels
         xval     = _mm_load_ps(val);
-        //Subtract the first 4 pixels from the current
         xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
-        //Apply mask with bitwise and function
-        // (xabsmask = 0x7FFFFFFF or all 1's  except for sign bit) thus acts as absolute value
         //Mask UNSAFE use alternative
         //xweight1 = _mm_and_ps(xweight1,xabsmask);
         xweight1 = _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), xweight1), xweight1);
-        //4-weight1
         xweight1 = _mm_sub_ps(xconst4,xweight1);
-        //Finds max of 2 values, if xweight1 is negative return 0
         xweight1 = _mm_max_ps(xconst0,xweight1);
-        //currect val*xweight = our factor
         xfactor1 = _mm_mul_ps(xval,xweight1);
 
         //Process next 4 pixels
