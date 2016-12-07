@@ -1475,8 +1475,11 @@ void Elas::adaptiveMean (float* D) {
         xval     = _mm_load_ps(val);
         //Subtract the first 4 pixels from the current
         xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
-        //Apply mask with bitwise and function(xabsmask = 0x7FFFFFFF or all 1's. thus this does nothing)
-        xweight1 = _mm_and_ps(xweight1,xabsmask);
+        //Apply mask with bitwise and function
+        // (xabsmask = 0x7FFFFFFF or all 1's  except for sign bit) thus acts as absolute value
+        //Mask UNSAFE use alternative
+        //xweight1 = _mm_and_ps(xweight1,xabsmask);
+        xweight1 = _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), xweight1), xweight1);
         //4-weight1
         xweight1 = _mm_sub_ps(xconst4,xweight1);
         //Finds max of 2 values, if xweight1 is negative return 0
@@ -1487,7 +1490,9 @@ void Elas::adaptiveMean (float* D) {
         //Process next 4 pixels
         xval     = _mm_load_ps(val+4);      
         xweight2 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
-        xweight2 = _mm_and_ps(xweight2,xabsmask);
+        //Mask UNSAFE use alternative
+        //xweight2 = _mm_and_ps(xweight2,xabsmask);
+        xweight2 = _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), xweight2), xweight2);
         xweight2 = _mm_sub_ps(xconst4,xweight2);
         xweight2 = _mm_max_ps(xconst0,xweight2);
         xfactor2 = _mm_mul_ps(xval,xweight2);
@@ -1527,14 +1532,18 @@ void Elas::adaptiveMean (float* D) {
 
         xval     = _mm_load_ps(val);      
         xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
-        xweight1 = _mm_and_ps(xweight1,xabsmask);
+        //Mask UNSAFE use alternative
+        //xweight1 = _mm_and_ps(xweight1,xabsmask);
+        xweight1 = _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), xweight1), xweight1);
         xweight1 = _mm_sub_ps(xconst4,xweight1);
         xweight1 = _mm_max_ps(xconst0,xweight1);
         xfactor1 = _mm_mul_ps(xval,xweight1);
 
         xval     = _mm_load_ps(val+4);      
         xweight2 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
-        xweight2 = _mm_and_ps(xweight2,xabsmask);
+        //Mask UNSAFE use alternative
+        //xweight2 = _mm_and_ps(xweight2,xabsmask);
+        xweight2 = _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), xweight2), xweight2);
         xweight2 = _mm_sub_ps(xconst4,xweight2);
         xweight2 = _mm_max_ps(xconst0,xweight2);
         xfactor2 = _mm_mul_ps(xval,xweight2);
