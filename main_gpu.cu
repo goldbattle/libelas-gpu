@@ -70,6 +70,7 @@ void process (const char* file_1,const char* file_2) {
   // process
   Elas::parameters param;
   param.postprocess_only_left = false;
+  //param.subsampling = true;
   ElasGPU elas(param);
   elas.process(I1->data,I2->data,D1_data,D2_data,dims);
 

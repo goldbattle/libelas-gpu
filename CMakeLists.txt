@@ -72,4 +72,5 @@ add_executable(libelas_cpu main_cpu.cpp ${sources_cpu})
 cuda_compile(sources_gpu_built main_gpu.cu ${sources_gpu})
 cuda_add_executable(libelas_gpu ${sources_gpu_built} ${sources_cpu})
 
-
+# Testing binary
+add_executable(libelas_test main_test.cpp ${sources_cpu})
