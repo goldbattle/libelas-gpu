@@ -172,10 +172,10 @@ __global__ void adaptiveMeanGPU8 (float* D, float* D_copy, float* D_horiz, int32
   float factor_sum = 0;
 
   for(int32_t i=0; i < 8; i++){
-      weight_sum0 = 4.0 - std::abs(val[i]-val_curr);
-      weight_sum0 = max(weight_sum0, 0.0);
-      weight_sum += weight_sum0;
-      factor_sum += val_curr*weight_sum0;
+    weight_sum0 = 4.0f - fabs(val[i]-val_curr);
+    weight_sum0 = max(0.0f, weight_sum0);
+    weight_sum += weight_sum0;
+    factor_sum += val[i]*weight_sum0;
   }
   
   if (weight_sum>0) {
@@ -197,10 +197,10 @@ __global__ void adaptiveMeanGPU8 (float* D, float* D_copy, float* D_horiz, int32
   factor_sum = 0;
 
   for(int32_t i=0; i < 8; i++){
-      weight_sum0 = 4.0 - std::abs(val[i]-val_curr);
-      weight_sum0 = max(weight_sum0, 0.0);
-      weight_sum += weight_sum0;
-      factor_sum += val_curr*weight_sum0;
+    weight_sum0 = 4.0f - fabs(val[i]-val_curr);
+    weight_sum0 = max(0.0f, weight_sum0);
+    weight_sum += weight_sum0;
+    factor_sum += val[i]*weight_sum0;
   }
   
   if (weight_sum>0) {
@@ -601,7 +601,7 @@ void ElasGPU::adaptiveMean (float* D) {
   } else {
     
     // Calculate size of kernel
-    /*int block_width = 8;
+    int block_width = 8;
     int block_height = block_width;
     int grid_width, grid_height;
 
@@ -647,10 +647,10 @@ void ElasGPU::adaptiveMean (float* D) {
     //Free memory
     cudaFree(d_D);
     cudaFree(d_D_copy);
-    cudaFree(d_D_horiz);*/
+    cudaFree(d_D_horiz);
 
     // horizontal filter
-    for (int32_t v=3; v<D_height-3; v++) {
+    /*for (int32_t v=3; v<D_height-3; v++) {
 
       // Preload first 7 pixels in row
       for (int32_t u=0; u<7; u++)
@@ -675,44 +675,6 @@ void ElasGPU::adaptiveMean (float* D) {
             weight_sum2 += weight_sum0;
             factor_sum2 += val[i]*weight_sum0;
         }
-
-        //Process first 4 pixels
-        /*xval     = _mm_load_ps(val);
-        //Subtract the first 4 pixels from the current
-        xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
-        //Apply mask with bitwise and function
-        // (xabsmask = 0x7FFFFFFF or all 1's  except for sign bit) thus acts as absolute value
-        //Mask UNSAFE use alternative
-        //xweight1 = _mm_and_ps(xweight1,xabsmask);
-        xweight1 = _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), xweight1), xweight1);
-        //4-weight1
-        xweight1 = _mm_sub_ps(xconst4,xweight1);
-        //Finds max of 2 values, if xweight1 is negative return 0
-        xweight1 = _mm_max_ps(xconst0,xweight1);
-        //currect val*xweight = our factor
-        xfactor1 = _mm_mul_ps(xval,xweight1);
-
-        //Process next 4 pixels
-        xval     = _mm_load_ps(val+4);      
-        xweight2 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
-        //Mask UNSAFE use alternative
-        //xweight2 = _mm_and_ps(xweight2,xabsmask);
-        xweight2 = _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), xweight2), xweight2);
-        xweight2 = _mm_sub_ps(xconst4,xweight2);
-        xweight2 = _mm_max_ps(xconst0,xweight2);
-        xfactor2 = _mm_mul_ps(xval,xweight2);
-
-        //sum up factor and weight
-        xweight1 = _mm_add_ps(xweight1,xweight2);
-        xfactor1 = _mm_add_ps(xfactor1,xfactor2);
-
-        //Pull out factor and weight from vector registers
-        _mm_store_ps(weight,xweight1);
-        _mm_store_ps(factor,xfactor1);
-
-        //Sum it up
-        float weight_sum = weight[0]+weight[1]+weight[2]+weight[3];
-        float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];*/
 
         if (weight_sum2>0) {
           float d = factor_sum2/weight_sum2;
@@ -746,54 +708,12 @@ void ElasGPU::adaptiveMean (float* D) {
             factor_sum2 += val[i]*weight_sum0;
         }
 
-        /*xval     = _mm_load_ps(val);      
-        xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
-        //xweight1 = _mm_and_ps(xweight1,xabsmask);
-        xweight1 = _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), xweight1), xweight1);
-        xweight1 = _mm_sub_ps(xconst4,xweight1);
-        xweight1 = _mm_max_ps(xconst0,xweight1);
-        xfactor1 = _mm_mul_ps(xval,xweight1);
-        _mm_store_ps(weight_1,xweight1);
-
-        xval     = _mm_load_ps(val+4);      
-        xweight2 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
-        //xweight2 = _mm_and_ps(xweight2,xabsmask);
-        xweight2 = _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), xweight2), xweight2);
-        xweight2 = _mm_sub_ps(xconst4,xweight2);
-        xweight2 = _mm_max_ps(xconst0,xweight2);
-        xfactor2 = _mm_mul_ps(xval,xweight2);
-        _mm_store_ps(weight_1b,xweight2);
-
-        xweight1 = _mm_add_ps(xweight1,xweight2);
-        xfactor1 = _mm_add_ps(xfactor1,xfactor2);
-
-        _mm_store_ps(weight,xweight1);
-        _mm_store_ps(factor,xfactor1);
-
-        float weight_sum = weight[0]+weight[1]+weight[2]+weight[3];
-        float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];
-
-        if(weight_sum != weight_sum2){
-          printf("Ooops %lf - %lf \n",factor_sum,factor_sum2);
-          printf("Ooops %lf - %lf \n",weight_sum,weight_sum2);
-          printf("%.10f - %.10f \n",weight_1[0],weight_2[0]);
-          printf("%.10f - %.10f \n",weight_1[1],weight_2[1]);
-          printf("%.10f - %.10f \n",weight_1[2],weight_2[2]);
-          printf("%.10f - %.10f \n",weight_1[3],weight_2[3]);
-          printf("%.10f - %.10f \n",weight_1b[0],weight_2[4]);
-          printf("%.10f - %.10f \n",weight_1b[1],weight_2[5]);
-          printf("%.10f - %.10f \n",weight_1b[2],weight_2[6]);
-          printf("%.10f - %.10f \n",weight_1b[3],weight_2[7]);
-          printf("%.10f - %.10f \n",weight_1[0]+weight_1[1]+weight_1[2]+weight_1[3],weight_2[0]+weight_2[1]+weight_2[2]+weight_2[3]);
-          printf("%.10f - %.10f \n",weight_1b[0]+weight_1b[1]+weight_1b[2]+weight_1b[3],weight_2[4]+weight_2[5]+weight_2[6]+weight_2[7]);
-        }*/
-
         if (weight_sum2>0) {
           float d = factor_sum2/weight_sum2;
           if (d>=0) *(D+(v-3)*D_width+u) = d;
         }
       }
-    }
+    }*/
   }
   
   // free memory
