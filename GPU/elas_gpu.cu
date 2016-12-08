@@ -512,7 +512,7 @@ void ElasGPU::adaptiveMean (float* D) {
   }
   
   __m128 xconst0 = _mm_set1_ps(0);
-  __m128 xconst4 = _mm_set1_ps(4);
+  __m128 xconst4 = _mm_set1_ps(4.0f);
   __m128 xval,xweight1,xweight2,xfactor1,xfactor2;
   
   float *val     = (float *)_mm_malloc(8*sizeof(float),16);
@@ -670,14 +670,14 @@ void ElasGPU::adaptiveMean (float* D) {
         float factor_sum2 = 0;
 
         for(int32_t i=0; i < 8; i++){
-            weight_sum0 = 4.0 - std::abs(val[i]-val_curr);
-            weight_sum0 = max(weight_sum0, 0.0);
+            weight_sum0 = 4.0f - std::fabs(val[i]-val_curr);
+            weight_sum0 = std::fmax(0.0f, weight_sum0);
             weight_sum2 += weight_sum0;
-            factor_sum2 += val_curr*weight_sum0;
+            factor_sum2 += val[i]*weight_sum0;
         }
-        
+
         //Process first 4 pixels
-        xval     = _mm_load_ps(val);
+        /*xval     = _mm_load_ps(val);
         //Subtract the first 4 pixels from the current
         xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
         //Apply mask with bitwise and function
@@ -712,14 +712,10 @@ void ElasGPU::adaptiveMean (float* D) {
 
         //Sum it up
         float weight_sum = weight[0]+weight[1]+weight[2]+weight[3];
-        float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];
-        
-        if(weight_sum != weight_sum2){
-          printf("Ooops111 %lf - %lf \n",factor_sum,factor_sum2);
-        }
+        float factor_sum = factor[0]+factor[1]+factor[2]+factor[3];*/
 
-        if (weight_sum>0) {
-          float d = factor_sum/weight_sum;
+        if (weight_sum2>0) {
+          float d = factor_sum2/weight_sum2;
           if (d>=0) *(D_tmp+v*D_width+(u-3)) = d;
         }
       }
@@ -745,18 +741,19 @@ void ElasGPU::adaptiveMean (float* D) {
 
         for(int32_t i=0; i < 8; i++){
             weight_sum0 = 4.0f - std::fabs(val[i]-val_curr);
-            weight_sum0 = std::fmax(weight_sum0, 0.0f);
+            weight_sum0 = std::fmax(0.0f, weight_sum0);
             weight_sum2 += weight_sum0;
-            factor_sum2 += val_curr*weight_sum0;
+            factor_sum2 += val[i]*weight_sum0;
         }
 
-        xval     = _mm_load_ps(val);      
+        /*xval     = _mm_load_ps(val);      
         xweight1 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
         //xweight1 = _mm_and_ps(xweight1,xabsmask);
         xweight1 = _mm_max_ps(_mm_sub_ps(_mm_setzero_ps(), xweight1), xweight1);
         xweight1 = _mm_sub_ps(xconst4,xweight1);
         xweight1 = _mm_max_ps(xconst0,xweight1);
         xfactor1 = _mm_mul_ps(xval,xweight1);
+        _mm_store_ps(weight_1,xweight1);
 
         xval     = _mm_load_ps(val+4);      
         xweight2 = _mm_sub_ps(xval,_mm_set1_ps(val_curr));
@@ -765,6 +762,7 @@ void ElasGPU::adaptiveMean (float* D) {
         xweight2 = _mm_sub_ps(xconst4,xweight2);
         xweight2 = _mm_max_ps(xconst0,xweight2);
         xfactor2 = _mm_mul_ps(xval,xweight2);
+        _mm_store_ps(weight_1b,xweight2);
 
         xweight1 = _mm_add_ps(xweight1,xweight2);
         xfactor1 = _mm_add_ps(xfactor1,xfactor2);
@@ -777,10 +775,21 @@ void ElasGPU::adaptiveMean (float* D) {
 
         if(weight_sum != weight_sum2){
           printf("Ooops %lf - %lf \n",factor_sum,factor_sum2);
-        }
+          printf("Ooops %lf - %lf \n",weight_sum,weight_sum2);
+          printf("%.10f - %.10f \n",weight_1[0],weight_2[0]);
+          printf("%.10f - %.10f \n",weight_1[1],weight_2[1]);
+          printf("%.10f - %.10f \n",weight_1[2],weight_2[2]);
+          printf("%.10f - %.10f \n",weight_1[3],weight_2[3]);
+          printf("%.10f - %.10f \n",weight_1b[0],weight_2[4]);
+          printf("%.10f - %.10f \n",weight_1b[1],weight_2[5]);
+          printf("%.10f - %.10f \n",weight_1b[2],weight_2[6]);
+          printf("%.10f - %.10f \n",weight_1b[3],weight_2[7]);
+          printf("%.10f - %.10f \n",weight_1[0]+weight_1[1]+weight_1[2]+weight_1[3],weight_2[0]+weight_2[1]+weight_2[2]+weight_2[3]);
+          printf("%.10f - %.10f \n",weight_1b[0]+weight_1b[1]+weight_1b[2]+weight_1b[3],weight_2[4]+weight_2[5]+weight_2[6]+weight_2[7]);
+        }*/
 
-        if (weight_sum>0) {
-          float d = factor_sum/weight_sum;
+        if (weight_sum2>0) {
+          float d = factor_sum2/weight_sum2;
           if (d>=0) *(D+(v-3)*D_width+u) = d;
         }
       }
