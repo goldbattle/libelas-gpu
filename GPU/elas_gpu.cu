@@ -134,10 +134,14 @@ __global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, int32_t size_to
 // implements approximation to 8x8 bilateral filtering
 __global__ void adaptiveMeanGPU8 (float* D, float* D_copy, float* D_horiz, int32_t D_width, int32_t D_height) {
   
-  // Pixel id
+  // Global coordinates and Pixel id
   uint32_t u0 = blockDim.x*blockIdx.x + threadIdx.x + 4;
   uint32_t v0 = blockDim.y*blockIdx.y + threadIdx.y + 4;
   uint32_t idx = v0*D_width + u0;
+  //Local thread coordinates
+  uint32_t ut = threadIdx.x + 4;
+  uint32_t vt = threadIdx.y + 4;
+  
 
   if(u0 > (D_width - 4) || v0 > (D_height - 4))
     return;
@@ -148,6 +152,37 @@ __global__ void adaptiveMeanGPU8 (float* D, float* D_copy, float* D_horiz, int32
     *(D_horiz+idx)  = -10;
   }
 
+  __shared__ float D_copy_S[32+8][32+8];
+  if(threadIdx.x == blockDim.x-1){
+      D_copy_S[ut+1][vt] = D[idx+1];
+      D_copy_S[ut+2][vt] = D[idx+2];
+      D_copy_S[ut+3][vt] = D[idx+3];
+      D_copy_S[ut+4][vt] = D[idx+4];
+  }
+  if(threadIdx.x == 0){
+      D_copy_S[ut-4][vt] = D[idx-4];
+      D_copy_S[ut-3][vt] = D[idx-3];
+      D_copy_S[ut-2][vt] = D[idx-2];
+      D_copy_S[ut-1][vt] = D[idx-1];
+  }
+  if(threadIdx.y == 0){
+      D_copy_S[ut][vt-4] = D[(v0-4)*D_width+u0];
+      D_copy_S[ut][vt-3] = D[(v0-3)*D_width+u0];
+      D_copy_S[ut][vt-2] = D[(v0-2)*D_width+u0];
+      D_copy_S[ut][vt-1] = D[(v0-1)*D_width+u0];
+  }
+  if(threadIdx.y == blockDim.y-1){
+      D_copy_S[ut][vt+1] = D[(v0+1)*D_width+u0];
+      D_copy_S[ut][vt+2] = D[(v0+2)*D_width+u0];
+      D_copy_S[ut][vt+3] = D[(v0+3)*D_width+u0];
+      D_copy_S[ut][vt+4] = D[(v0+4)*D_width+u0];
+  }
+
+  if(D[idx] < 0){
+      D_copy_S[ut][vt] = -10;
+  }else{
+      D_copy_S[ut][vt] = D[idx];
+  }
   __syncthreads();
       
   // full resolution: 8 pixel bilateral filter width
@@ -166,18 +201,67 @@ __global__ void adaptiveMeanGPU8 (float* D, float* D_copy, float* D_horiz, int32
   float weight_sum = 0;
   float factor_sum = 0;
 
+  float weight_sum2 = 0;
+  float factor_sum2 = 0;
+
   for(int32_t i=0; i < 8; i++){
     weight_sum0 = 4.0f - fabs(*(D_copy+idx+(i-4))-val_curr);
     weight_sum0 = max(0.0f, weight_sum0);
     weight_sum += weight_sum0;
     factor_sum += *(D_copy+idx+(i-4))*weight_sum0;
   }
+
+  for(int32_t i=0; i < 8; i++){
+    weight_sum0 = 4.0f - fabs(D_copy_S[ut+(i-4)][vt]-val_curr);
+    weight_sum0 = max(0.0f, weight_sum0);
+    weight_sum2 += weight_sum0;
+    factor_sum2 += D_copy_S[ut+(i-4)][vt]*weight_sum0;
+  }
+
+  if(blockIdx.x == 0 && blockIdx.y == 0){
+      if(weight_sum != weight_sum2){
+          printf("Shared error %.10f - %.10f | %d - %d\n", weight_sum, weight_sum2,threadIdx.x,threadIdx.y);
+      }
+  }
   
-  if (weight_sum>0) {
-      float d = factor_sum/weight_sum;
+  if (weight_sum2>0) {
+      float d = factor_sum2/weight_sum2;
       if (d>=0) *(D_horiz+idx) = d;
   }
   
+  __syncthreads();
+
+  if(threadIdx.x == blockDim.x-1){
+      D_copy_S[ut+1][vt] = D_horiz[idx+1];
+      D_copy_S[ut+2][vt] = D_horiz[idx+2];
+      D_copy_S[ut+3][vt] = D_horiz[idx+3];
+      D_copy_S[ut+4][vt] = D_horiz[idx+4];
+  }
+  if(threadIdx.x == 0){
+      D_copy_S[ut-4][vt] = D_horiz[idx-4];
+      D_copy_S[ut-3][vt] = D_horiz[idx-3];
+      D_copy_S[ut-2][vt] = D_horiz[idx-2];
+      D_copy_S[ut-1][vt] = D_horiz[idx-1];
+  }
+  if(threadIdx.y == 0){
+      D_copy_S[ut][vt-4] = D_horiz[(v0-4)*D_width+u0];
+      D_copy_S[ut][vt-3] = D_horiz[(v0-3)*D_width+u0];
+      D_copy_S[ut][vt-2] = D_horiz[(v0-2)*D_width+u0];
+      D_copy_S[ut][vt-1] = D_horiz[(v0-1)*D_width+u0];
+  }
+  if(threadIdx.y == blockDim.y-1){
+      D_copy_S[ut][vt+1] = D_horiz[(v0+1)*D_width+u0];
+      D_copy_S[ut][vt+2] = D_horiz[(v0+2)*D_width+u0];
+      D_copy_S[ut][vt+3] = D_horiz[(v0+3)*D_width+u0];
+      D_copy_S[ut][vt+4] = D_horiz[(v0+4)*D_width+u0];
+  }
+
+  if(D[idx] < 0){
+      D_copy_S[ut][vt] = -10;
+  }else{
+      D_copy_S[ut][vt] = D_horiz[idx];
+  }
+
   __syncthreads();
 
   // vertical filter
@@ -195,6 +279,22 @@ __global__ void adaptiveMeanGPU8 (float* D, float* D_copy, float* D_horiz, int32
     factor_sum += *(D_horiz+(v0+(i-4))*D_width+u0)*weight_sum0;
   }
   
+  weight_sum2 = 0;
+  factor_sum2 = 0;
+
+  for(int32_t i=0; i < 8; i++){
+    weight_sum0 = 4.0f - fabs(D_copy_S[ut][vt+(i-4)]-val_curr);
+    weight_sum0 = max(0.0f, weight_sum0);
+    weight_sum2 += weight_sum0;
+    factor_sum2 += D_copy_S[ut][vt+(i-4)]*weight_sum0;
+  }
+
+  if(blockIdx.x == 0 && blockIdx.y == 0){
+      if(weight_sum != weight_sum2){
+          printf("Shared error in Y %.10f - %.10f | %d - %d\n", weight_sum, weight_sum2,threadIdx.x,threadIdx.y);
+      }
+  }
+
   if (weight_sum>0) {
       float d = factor_sum/weight_sum;
       if (d>=0) *(D+idx) = d;
