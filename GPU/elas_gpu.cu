@@ -3,29 +3,151 @@
 using namespace std;
 
 
+
+__device__ uint32_t getAddressOffsetImage_GPU (const int32_t& u,const int32_t& v,const int32_t& width) {
+  return v*width+u;
+}
+
+__device__ uint32_t getAddressOffsetGrid_GPU (const int32_t& x,const int32_t& y,const int32_t& d,const int32_t& width,const int32_t& disp_num) {
+  return (y*width+x)*disp_num+d;
+}
+
+
+
 // Cuda kernel to compute the support points in an image
-// __global__ void computeMatchingDisparity(uint8_t* I1_desc, uint8_t* I2_desc, float *d_D_can, int32_t D_candidate_stepsize,
-//                                         int32_t D_can_width, int32_t D_can_heigh, bool right_image) {
+__global__ void computeMatchingDisparity_GPU(uint8_t* I1_desc, uint8_t* I2_desc, int32_t width, int32_t height,
+                                            float *D_can, int32_t D_candidate_stepsize, int32_t D_can_width,
+                                            int32_t D_can_height, bool right_image) {
   
-//   const int32_t u_step      = 2;
-//   const int32_t v_step      = 2;
-//   const int32_t window_size = 3;
+  const int32_t u_step      = 2;
+  const int32_t v_step      = 2;
+  const int32_t window_size = 3;
 
-//   // Global coordinates and Pixel id
-//   uint32_t u0 = (blockDim.x*blockIdx.x + threadIdx.x) * D_candidate_stepsize;
-//   uint32_t v0 = (blockDim.y*blockIdx.y + threadIdx.y) * D_candidate_stepsize;
+  // TODO: remove hard coded value
+  int32_t support_texture = 10;
+  int32_t disp_min = 0;
+  int32_t disp_max = 255;
+  float support_threshold = 0.95;
 
-//   // Candidate matrix coordinates
-//   uint32_t uC = blockDim.x*blockIdx.x + threadIdx.x;
-//   uint32_t vC = blockDim.y*blockIdx.y + threadIdx.y;
+  // Global coordinates and Pixel id
+  uint32_t u = (blockDim.x*blockIdx.x + threadIdx.x) * D_candidate_stepsize;
+  uint32_t v = (blockDim.y*blockIdx.y + threadIdx.y) * D_candidate_stepsize;
+
+  // Candidate matrix coordinates
+  uint32_t u_can = blockDim.x*blockIdx.x + threadIdx.x;
+  uint32_t v_can = blockDim.y*blockIdx.y + threadIdx.y;
   
-//   // Get 4 cornering discriptors (NE NE SE SW)
-//   int32_t desc_offset_1 = -16*u_step-16*width*v_step;
-//   int32_t desc_offset_2 = +16*u_step-16*width*v_step;
-//   int32_t desc_offset_3 = -16*u_step+16*width*v_step;
-//   int32_t desc_offset_4 = +16*u_step+16*width*v_step;
+  // Get 4 cornering discriptors (NE NE SE SW)
+  int32_t desc_offset_1 = -16*u_step-16*width*v_step;
+  int32_t desc_offset_2 = +16*u_step-16*width*v_step;
+  int32_t desc_offset_3 = -16*u_step+16*width*v_step;
+  int32_t desc_offset_4 = +16*u_step+16*width*v_step;
 
-// }
+  // Check if we are inside the image region
+  if (u>=window_size+u_step && u<=width-window_size-1-u_step && v>=window_size+v_step && v<=height-window_size-1-v_step) {
+
+    // compute desc and start addresses
+    int32_t  line_offset = 16*width*v;
+    uint8_t *I1_line_addr,*I2_line_addr;
+    if (!right_image) {
+      I1_line_addr = I1_desc+line_offset;
+      I2_line_addr = I2_desc+line_offset;
+    } else {
+      I1_line_addr = I2_desc+line_offset;
+      I2_line_addr = I1_desc+line_offset;
+    }
+
+    // compute I1 block start addresses
+    uint8_t* I1_block_addr = I1_line_addr+16*u;
+    uint8_t* I2_block_addr;
+    
+    // We require at least some texture
+    // Sum intensity values around the candidate
+    int32_t sum = 0;
+    for (int32_t i=0; i<16; i++)
+      sum += abs((int32_t)(*(I1_block_addr+i))-128); //TODO: Why subtract 128
+    //If our candidate had a texture below a threshold (Aka not a line) dont use it
+    if (sum<support_texture) 
+      return;
+
+    // declare match energy for each disparity
+    int32_t u_warp;
+    
+    // best match
+    int16_t min_1_E = 32767;
+    int16_t min_1_d = -1;
+    int16_t min_2_E = 32767;
+    int16_t min_2_d = -1;
+
+    // get valid disparity range
+    int32_t disp_min_valid = max(disp_min,0);
+    int32_t disp_max_valid = disp_max;
+    //Limits how far we can go out based on window and surrounding candidate points size
+    if (!right_image) disp_max_valid = min(disp_max,u-window_size-u_step);
+    else              disp_max_valid = min(disp_max,width-u-window_size-u_step);
+    
+    // assume, that we can compute at least 10 disparities for this pixel
+    if (disp_max_valid-disp_min_valid<10)
+      return;
+
+    // for all disparities do
+    // Interate through our disparity values (at least 10)
+    for (int16_t d=disp_min_valid; d<=disp_max_valid; d++) {
+
+      // Warp u coordinate
+      // Remember u_warp is applied to the opposite side!
+      if (!right_image) u_warp = u-d;
+      else              u_warp = u+d;
+
+      // Compute I2 block start addresses
+      I2_block_addr = I2_line_addr+16*u_warp;
+
+      // Compute match energy at this disparity
+      // Sum all the intensity differences of all the surrounding candidates between the first I1 and second I2 images 
+      sum = 0;
+
+      // Get NE candidate from image 2
+      for(int j=0; j<16; j++){
+          sum += abs((int16_t)(*(I1_block_addr+desc_offset_1+j))-(int16_t)(*(I2_block_addr+desc_offset_1+j)));
+      }
+      // Get NW candidate from image 2
+      for(int j=0; j<16; j++){
+          sum += abs((int16_t)(*(I1_block_addr+desc_offset_2+j))-(int16_t)(*(I2_block_addr+desc_offset_2+j)));
+      }
+      // Get SE candidate from image 2
+      for(int j=0; j<16; j++){
+          sum += abs((int16_t)(*(I1_block_addr+desc_offset_3+j))-(int16_t)(*(I2_block_addr+desc_offset_3+j)));
+      }
+      // Get SW candidate from image 2
+      for(int j=0; j<16; j++){
+          sum += abs((int16_t)(*(I1_block_addr+desc_offset_4+j))-(int16_t)(*(I2_block_addr+desc_offset_4+j)));
+      }
+
+      // best + second best match
+      //(Smaller sum = better match)
+      if (sum<min_1_E) {
+        min_2_E = min_1_E;   
+        min_2_d = min_1_d;
+        min_1_E = sum;
+        min_1_d = d;
+      } else if (sum<min_2_E) {
+        min_2_E = sum;
+        min_2_d = d;
+      }
+    }
+
+    // check if best and second best match are available and if matching ratio is sufficient
+    // Threshold says the second is within the 95th percentile of the first
+    if (min_1_d>=0 && min_2_d>=0 && (float)min_1_E<support_threshold*(float)min_2_E) {
+      printf("setting disparity = %d\n", min_1_d);
+      *(D_can+getAddressOffsetImage_GPU(u_can,v_can,D_can_width)) = min_1_d;
+    }
+    else
+      *(D_can+getAddressOffsetImage_GPU(u_can,v_can,D_can_width)) = -1;
+
+  }
+
+}
 
 
 int16_t ElasGPU::computeMatchingDisparity(const int32_t &u,const int32_t &v,uint8_t* I1_desc,uint8_t* I2_desc,const bool &right_image) {
@@ -219,60 +341,60 @@ vector<Elas::support_pt> ElasGPU::computeSupportMatches(uint8_t* I1_desc,uint8_t
 
   // CUDA copy over needed memory information
   // candidate disparity grid, and image descriptors
-  float *d_D_can;
+  float *d_D_can_LR, *d_D_can_RL;
   uint8_t *d_I1, *d_I2;
 
   // Allocate on global memory and copy
-  // cudaMalloc((void**) &d_D_can, D_can_width*D_can_height*sizeof(int16_t));
-  // cudaMalloc((void**) &d_I1, 16*width*height*sizeof(uint8_t)); //Device descriptors
-  // cudaMalloc((void**) &d_I2, 16*width*height*sizeof(uint8_t)); //Device descriptors
+  cudaMalloc((void**) &d_D_can_LR, D_can_width*D_can_height*sizeof(int16_t));
+  cudaMalloc((void**) &d_D_can_RL, D_can_width*D_can_height*sizeof(int16_t));
+  cudaMalloc((void**) &d_I1, 16*width*height*sizeof(uint8_t)); //Device descriptors
+  cudaMalloc((void**) &d_I2, 16*width*height*sizeof(uint8_t)); //Device descriptors
 
   // Now copy over data
-  // cudaMemcpy(d_I1, I1_desc, 16*width*height*sizeof(uint8_t), cudaMemcpyHostToDevice);
-  // cudaMemcpy(d_I2, I2_desc, 16*width*height*sizeof(uint8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_I1, I1_desc, 16*width*height*sizeof(uint8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_I2, I2_desc, 16*width*height*sizeof(uint8_t), cudaMemcpyHostToDevice);
 
-  // Compute disparities left to right
-  // computeMatchingDisparity_GPU<<<DimGrid, DimBlock>>>(d_I1, d_I2, d_D_can, D_candidate_stepsize, D_can_width, D_can_height, false);
+  // Create two streams to the GPU
+  cudaStream_t streams[2];
+  cudaStreamCreate(&streams[0]);
+  cudaStreamCreate(&streams[1]);
 
-  // Compute disparities right to left
-  // computeMatchingDisparity_GPU<<<DimGrid, DimBlock>>>(d_I1, d_I2, d_D_can, D_candidate_stepsize, D_can_width, D_can_height, true);
+  // KERNEL: Compute disparities left to right
+  computeMatchingDisparity_GPU<<<DimGrid,DimBlock,0,streams[0]>>>(d_I1, d_I2, width, height,
+                                                                  d_D_can_LR, D_candidate_stepsize, D_can_width,
+                                                                  D_can_height, false);
 
-  // Sync after the kernel is launched
-  // cudaDeviceSynchronize();
+  // KERNEL: Compute disparities right to left
+  computeMatchingDisparity_GPU<<<DimGrid,DimBlock,0,streams[1]>>>(d_I1, d_I2, width, height,
+                                                                  d_D_can_RL, D_candidate_stepsize, D_can_width,
+                                                                  D_can_height, true);
 
   // Copy the final disparity candidate values back over
-  int16_t* D_can = (int16_t*)calloc(D_can_width*D_can_height,sizeof(int16_t));
-  // cudaMemcpy(D_can, d_D_can, width*height*sizeof(float), cudaMemcpyDeviceToHost);
+  int16_t* D_can_1 = (int16_t*)calloc(D_can_width*D_can_height,sizeof(int16_t));
+  int16_t* D_can_2 = (int16_t*)calloc(D_can_width*D_can_height,sizeof(int16_t));
+  cudaMemcpyAsync(D_can_1, d_D_can_LR, width*height*sizeof(float), cudaMemcpyDeviceToHost, streams[0]);
+  cudaMemcpyAsync(D_can_2, d_D_can_RL, width*height*sizeof(float), cudaMemcpyDeviceToHost, streams[1]);
 
-  
-  // TODO: Remove this logic
-  int32_t u,v;
-  int16_t d,d2;
-   
-  // for all point candidates in image 1 do
+  // Sync after the kernel is launched
+  // Ensures we have copied this data back to the host
+  cudaDeviceSynchronize();
+
+  // TODO: Remove this logic, this is here so we can call the other methods
+  int16_t* D_can = (int16_t*)calloc(D_can_width*D_can_height,sizeof(int16_t));
   for (int32_t u_can=1; u_can<D_can_width; u_can++) {
-    u = u_can*D_candidate_stepsize;
     for (int32_t v_can=1; v_can<D_can_height; v_can++) {
-      v = v_can*D_candidate_stepsize;
-      
-      // initialize disparity candidate to invalid
-      *(D_can+getAddressOffsetImage(u_can,v_can,D_can_width)) = -1; //Find the current candidate location
-      
-      // find forwards
-      d = computeMatchingDisparity(u,v,I1_desc,I2_desc,false); //Left image
-      //If we have found a disparity in the left, check from the right to left disparity
-      if (d>=0) {
-        
-        // find backwards
-        d2 = computeMatchingDisparity(u-d,v,I1_desc,I2_desc,true);
-        //Check our error between the 2 disparity and that its below 2 pixel difference
-        if (d2>=0 && abs(d-d2)<=param.lr_threshold)
-            //TODO: Use average of the two? Why only the left?
-          *(D_can+getAddressOffsetImage(u_can,v_can,D_can_width)) = d; //Save disparity 
+      // Get the two left and right disp
+      int16_t d1 = *(D_can_1+getAddressOffsetImage(u_can,v_can,D_can_width));
+      int16_t d2 = *(D_can_2+getAddressOffsetImage(u_can,v_can,D_can_width));
+      // Compare their values
+      if (d1>0 && d2>0 && abs(d1-d2)<=param.lr_threshold) {
+        cout << "setting (" << u_can << ", " << v_can << ") = " << d1 << endl;
+        *(D_can+getAddressOffsetImage(u_can,v_can,D_can_width)) = d1;
+      } else {
+        *(D_can+getAddressOffsetImage(u_can,v_can,D_can_width)) = -1;
       }
     }
   }
-
 
   // TODO: Make this a kernel
   // Remove inconsistent support points
@@ -301,7 +423,15 @@ vector<Elas::support_pt> ElasGPU::computeSupportMatches(uint8_t* I1_desc,uint8_t
 
   // free memory
   free(D_can);
-  
+  free(D_can_1);
+  free(D_can_2);
+
+  // Cuda frees
+  cudaFree(d_D_can_LR);
+  cudaFree(d_D_can_RL);
+  cudaFree(d_I1);
+  cudaFree(d_I2);
+
   // return support point vector
   return p_support;
 
@@ -309,15 +439,6 @@ vector<Elas::support_pt> ElasGPU::computeSupportMatches(uint8_t* I1_desc,uint8_t
 
 
 
-
-
-__device__ uint32_t getAddressOffsetImage_GPU (const int32_t& u,const int32_t& v,const int32_t& width) {
-  return v*width+u;
-}
-
-__device__ uint32_t getAddressOffsetGrid_GPU (const int32_t& x,const int32_t& y,const int32_t& d,const int32_t& width,const int32_t& disp_num) {
-  return (y*width+x)*disp_num+d;
-}
 
 /**
  * CUDA Kernel for computing the match for a single UV coordinate
