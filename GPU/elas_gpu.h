@@ -35,10 +35,12 @@ public:
 // This assumes the user knows what they are doing
 public:
 
+  // std::vector<support_pt> computeSupportMatches(uint8_t* I1_desc,uint8_t* I2_desc);
+
   void computeDisparity(std::vector<support_pt> p_support,std::vector<triangle> tri,int32_t* disparity_grid,int32_t *grid_dims,
                         uint8_t* I1_desc,uint8_t* I2_desc,bool right_image,float* D);
 
-  void adaptiveMean (float* D);
+  void adaptiveMean(float* D);
 
 };
 

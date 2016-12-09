@@ -13,18 +13,14 @@ __device__ uint32_t getAddressOffsetGrid_GPU (const int32_t& x,const int32_t& y,
 /**
  * CUDA Kernel for computing the match for a single UV coordinate
  */
-__global__ void findMatch_GPU (int32_t* u_vals, int32_t* v_vals, int32_t size_total, float* planes_a, float* planes_b, float* planes_c,
+__global__ void findMatch_GPU(int32_t* u_vals, int32_t* v_vals, int32_t size_total, float* planes_a, float* planes_b, float* planes_c,
                          int32_t* disparity_grid, int32_t *grid_dims, uint8_t* I1_desc, uint8_t* I2_desc,
-                         int32_t* P, int32_t plane_radius, int32_t width ,int32_t height, bool* valids, bool right_image, float* D) {
+                         int32_t* P, int32_t plane_radius, int32_t width ,int32_t height, bool* valids, bool right_image, float* D,
+                         bool subsampling, int32_t match_texture, int32_t grid_size) {
  
   // get image width and height
   const int32_t disp_num    = grid_dims[0]-1;
   const int32_t window_size = 2;
-  
-  //TODO: Remove hard code and use param
-  bool subsampling = false;
-  bool match_texture = true;
-  int32_t grid_size = 20;
 
   // Pixel id
   uint32_t idx = blockDim.x*blockIdx.x + threadIdx.x;
@@ -269,6 +265,17 @@ __global__ void adaptiveMeanGPU8 (float* D, int32_t D_width, int32_t D_height) {
 
 }
 
+/*
+* Computes the disparity for each support point candidate 
+* Removes outlier and redundant support points
+*/
+// vector<Elas::support_pt> ElasGPU::computeSupportMatches(uint8_t* I1_desc,uint8_t* I2_desc) {
+
+//   // For now call super
+//   return computeSupportMatches(I1_desc,I2_desc);
+
+// }
+
 /**
  * This is the core method that computes the disparity of the image
  * It processes each triangle, so we create a kernel and have each thread
@@ -506,7 +513,8 @@ void ElasGPU::computeDisparity(std::vector<support_pt> p_support, std::vector<tr
   // Launch the kernel
   findMatch_GPU<<<DimGrid, DimBlock>>>(d_u_vals, d_v_vals, size_total, d_planes_a, d_planes_b, d_planes_c,
                                         d_disparity_grid, d_grid_dims, d_I1, d_I2, d_P, plane_radius,
-                                        width, height, d_valids, right_image, d_D);
+                                        width, height, d_valids, right_image, d_D,
+                                        param.subsampling, param.match_texture, param.grid_size);
     
   // Sync after the kernel is launched
   cudaDeviceSynchronize();
