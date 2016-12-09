@@ -35,7 +35,8 @@ public:
 // This assumes the user knows what they are doing
 public:
 
-  // std::vector<support_pt> computeSupportMatches(uint8_t* I1_desc,uint8_t* I2_desc);
+  int16_t computeMatchingDisparity(const int32_t &u,const int32_t &v,uint8_t* I1_desc,uint8_t* I2_desc,const bool &right_image);
+  std::vector<support_pt> computeSupportMatches(uint8_t* I1_desc,uint8_t* I2_desc);
 
   void computeDisparity(std::vector<support_pt> p_support,std::vector<triangle> tri,int32_t* disparity_grid,int32_t *grid_dims,
                         uint8_t* I1_desc,uint8_t* I2_desc,bool right_image,float* D);

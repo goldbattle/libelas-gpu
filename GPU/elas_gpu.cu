@@ -2,6 +2,315 @@
 
 using namespace std;
 
+
+// Cuda kernel to compute the support points in an image
+// __global__ void computeMatchingDisparity(uint8_t* I1_desc, uint8_t* I2_desc, float *d_D_can, int32_t D_candidate_stepsize,
+//                                         int32_t D_can_width, int32_t D_can_heigh, bool right_image) {
+  
+//   const int32_t u_step      = 2;
+//   const int32_t v_step      = 2;
+//   const int32_t window_size = 3;
+
+//   // Global coordinates and Pixel id
+//   uint32_t u0 = (blockDim.x*blockIdx.x + threadIdx.x) * D_candidate_stepsize;
+//   uint32_t v0 = (blockDim.y*blockIdx.y + threadIdx.y) * D_candidate_stepsize;
+
+//   // Candidate matrix coordinates
+//   uint32_t uC = blockDim.x*blockIdx.x + threadIdx.x;
+//   uint32_t vC = blockDim.y*blockIdx.y + threadIdx.y;
+  
+//   // Get 4 cornering discriptors (NE NE SE SW)
+//   int32_t desc_offset_1 = -16*u_step-16*width*v_step;
+//   int32_t desc_offset_2 = +16*u_step-16*width*v_step;
+//   int32_t desc_offset_3 = -16*u_step+16*width*v_step;
+//   int32_t desc_offset_4 = +16*u_step+16*width*v_step;
+
+// }
+
+
+int16_t ElasGPU::computeMatchingDisparity(const int32_t &u,const int32_t &v,uint8_t* I1_desc,uint8_t* I2_desc,const bool &right_image) {
+
+  const int32_t u_step      = 2;
+  const int32_t v_step      = 2;
+  const int32_t window_size = 3;
+  
+  // Get 4 cornering descriptors (NE NE SE SW)
+  int32_t desc_offset_1 = -16*u_step-16*width*v_step;
+  int32_t desc_offset_2 = +16*u_step-16*width*v_step;
+  int32_t desc_offset_3 = -16*u_step+16*width*v_step;
+  int32_t desc_offset_4 = +16*u_step+16*width*v_step;
+  
+  __m128i xmm1,xmm2,xmm3,xmm4,xmm5,xmm6;
+
+  // check if we are inside the image region
+  if (u>=window_size+u_step && u<=width-window_size-1-u_step && v>=window_size+v_step && v<=height-window_size-1-v_step) {
+    
+    // compute desc and start addresses
+    int32_t  line_offset = 16*width*v;
+    uint8_t *I1_line_addr,*I2_line_addr;
+    if (!right_image) {
+      I1_line_addr = I1_desc+line_offset;
+      I2_line_addr = I2_desc+line_offset;
+    } else {
+      I1_line_addr = I2_desc+line_offset;
+      I2_line_addr = I1_desc+line_offset;
+    }
+
+    // compute I1 block start addresses
+    uint8_t* I1_block_addr = I1_line_addr+16*u;
+    uint8_t* I2_block_addr;
+    
+    // we require at least some texture
+    // Sum intensity values around the candidate
+    int32_t sum = 0;
+    for (int32_t i=0; i<16; i++)
+      sum += abs((int32_t)(*(I1_block_addr+i))-128); //TODO: Why subtract 128
+    //If our candidate had a texture below a threshold (Aka not a line) dont use it
+    if (sum<param.support_texture) 
+      return -1;
+    
+    // load first blocks to xmm registers (Loading corning registers)
+    xmm1 = _mm_load_si128((__m128i*)(I1_block_addr+desc_offset_1));
+    xmm2 = _mm_load_si128((__m128i*)(I1_block_addr+desc_offset_2));
+    xmm3 = _mm_load_si128((__m128i*)(I1_block_addr+desc_offset_3));
+    xmm4 = _mm_load_si128((__m128i*)(I1_block_addr+desc_offset_4));
+    
+    // declare match energy for each disparity
+    int32_t u_warp;
+    
+    // best match
+    int16_t min_1_E = 32767;
+    int16_t min_1_d = -1;
+    int16_t min_2_E = 32767;
+    int16_t min_2_d = -1;
+
+    // get valid disparity range
+    int32_t disp_min_valid = max(param.disp_min,0);
+    int32_t disp_max_valid = param.disp_max;
+    //Limits how far we can go out based on window and surrounding candidate points size
+    if (!right_image) disp_max_valid = min(param.disp_max,u-window_size-u_step);
+    else              disp_max_valid = min(param.disp_max,width-u-window_size-u_step);
+    
+    // assume, that we can compute at least 10 disparities for this pixel
+    if (disp_max_valid-disp_min_valid<10)
+      return -1;
+
+    // for all disparities do
+    // Interate through our disparity values (at least 10)
+    for (int16_t d=disp_min_valid; d<=disp_max_valid; d++) {
+
+      // warp u coordinate
+      // Remember u_warp is applied to the opposite side!
+      if (!right_image) u_warp = u-d;
+      else              u_warp = u+d;
+
+      // compute I2 block start addresses
+      I2_block_addr = I2_line_addr+16*u_warp;
+
+      // compute match energy at this disparity
+      // Sum all the intensity differences of all the surrounding candidates between the first I1 and second I2 images 
+      // Get NE candidate from image 2
+      xmm6 = _mm_load_si128((__m128i*)(I2_block_addr+desc_offset_1));
+      //_mm_sad_epu8 sums the difference of the first 64 bytes and second 64 bytes (returns 2 values)
+      xmm6 = _mm_sad_epu8(xmm1,xmm6); //Subtract the two values from image 1 and image 2
+      sum = 0;
+      // Get NE candidate from image 2
+      for(int j=0; j<16; j++){
+          sum += abs((int16_t)(*(I1_block_addr+desc_offset_1+j))-(int16_t)(*(I2_block_addr+desc_offset_1+j)));
+      }
+
+      // Get NW candidate from image 2
+      xmm5 = _mm_load_si128((__m128i*)(I2_block_addr+desc_offset_2));
+      xmm6 = _mm_add_epi16(_mm_sad_epu8(xmm2,xmm5),xmm6);
+      // Get NW candidate from image 2
+      for(int j=0; j<16; j++){
+          sum += abs((int16_t)(*(I1_block_addr+desc_offset_2+j))-(int16_t)(*(I2_block_addr+desc_offset_2+j)));
+      }
+
+      // Get SE candidate from image 2
+      xmm5 = _mm_load_si128((__m128i*)(I2_block_addr+desc_offset_3));
+      xmm6 = _mm_add_epi16(_mm_sad_epu8(xmm3,xmm5),xmm6);
+      // Get SE candidate from image 2
+      for(int j=0; j<16; j++){
+          sum += abs((int16_t)(*(I1_block_addr+desc_offset_3+j))-(int16_t)(*(I2_block_addr+desc_offset_3+j)));
+      }
+
+      // Get SW candidate from image 2
+      xmm5 = _mm_load_si128((__m128i*)(I2_block_addr+desc_offset_4));
+      xmm6 = _mm_add_epi16(_mm_sad_epu8(xmm4,xmm5),xmm6);
+      // Get SW candidate from image 2
+      for(int j=0; j<16; j++){
+          sum += abs((int16_t)(*(I1_block_addr+desc_offset_4+j))-(int16_t)(*(I2_block_addr+desc_offset_4+j)));
+      }
+
+      // Testing, compare
+      int32_t temp = _mm_extract_epi16(xmm6,0)+_mm_extract_epi16(xmm6,4); //Sum all the differences
+      if(sum != temp) {
+        printf("sum = %d  |  temp = %d\n", sum, temp);
+        sum = temp;
+      }
+
+      // best + second best match
+      //(Smaller sum = better match)
+      if (sum<min_1_E) {
+        min_2_E = min_1_E;   
+        min_2_d = min_1_d;
+        min_1_E = sum;
+        min_1_d = d;
+      } else if (sum<min_2_E) {
+        min_2_E = sum;
+        min_2_d = d;
+      }
+    }
+
+    // check if best and second best match are available and if matching ratio is sufficient
+    // Threshold says the second is within the 95th percentile of the first
+    if (min_1_d>=0 && min_2_d>=0 && (float)min_1_E<param.support_threshold*(float)min_2_E)
+      return min_1_d;
+    else
+      return -1;
+    
+  } else
+    return -1;
+
+
+}
+
+
+/*
+* Computes the disparity for each support point candidate 
+* Removes outlier and redundant support points
+*/
+vector<Elas::support_pt> ElasGPU::computeSupportMatches(uint8_t* I1_desc,uint8_t* I2_desc) {
+
+  // be sure that at half resolution we only need data
+  // from every second line!
+  int32_t D_candidate_stepsize = param.candidate_stepsize; //Stride over candidates for discriptors
+  if (param.subsampling)
+    D_candidate_stepsize += D_candidate_stepsize%2;
+
+  // create matrix for saving disparity candidates
+  int32_t D_can_width  = 0;
+  int32_t D_can_height = 0;
+  for (int32_t u=0; u<width;  u+=D_candidate_stepsize) D_can_width++; //Determine number of candidates at the stepsize in the horizontal
+  for (int32_t v=0; v<height; v+=D_candidate_stepsize) D_can_height++; //Determine number of candidates at the stepsize in the vertical  
+  
+  // Calculate size of kernel
+  int block_width = 32;
+  int block_height = block_width;
+  int grid_width, grid_height;
+
+  // Calculate grid_size
+  if(D_can_width%block_width == 0) {
+      grid_width = ceil(D_can_width/block_width);
+  } else {
+      grid_width = ceil(D_can_width/block_width); + 1;
+  }
+
+  if(D_can_height%block_height == 0) {
+      grid_height = ceil(D_can_height/block_height);
+  } else {
+      grid_height = ceil(D_can_height/block_height); + 1;
+  }
+
+   // Create size objects
+  dim3 DimGrid(grid_width,grid_height,1);
+  dim3 DimBlock(block_width,block_height,1);
+
+  // CUDA copy over needed memory information
+  // candidate disparity grid, and image descriptors
+  float *d_D_can;
+  uint8_t *d_I1, *d_I2;
+
+  // Allocate on global memory and copy
+  // cudaMalloc((void**) &d_D_can, D_can_width*D_can_height*sizeof(int16_t));
+  // cudaMalloc((void**) &d_I1, 16*width*height*sizeof(uint8_t)); //Device descriptors
+  // cudaMalloc((void**) &d_I2, 16*width*height*sizeof(uint8_t)); //Device descriptors
+
+  // Now copy over data
+  // cudaMemcpy(d_I1, I1_desc, 16*width*height*sizeof(uint8_t), cudaMemcpyHostToDevice);
+  // cudaMemcpy(d_I2, I2_desc, 16*width*height*sizeof(uint8_t), cudaMemcpyHostToDevice);
+
+  // Compute disparities left to right
+  // computeMatchingDisparity_GPU<<<DimGrid, DimBlock>>>(d_I1, d_I2, d_D_can, D_candidate_stepsize, D_can_width, D_can_height, false);
+
+  // Compute disparities right to left
+  // computeMatchingDisparity_GPU<<<DimGrid, DimBlock>>>(d_I1, d_I2, d_D_can, D_candidate_stepsize, D_can_width, D_can_height, true);
+
+  // Sync after the kernel is launched
+  // cudaDeviceSynchronize();
+
+  // Copy the final disparity candidate values back over
+  int16_t* D_can = (int16_t*)calloc(D_can_width*D_can_height,sizeof(int16_t));
+  // cudaMemcpy(D_can, d_D_can, width*height*sizeof(float), cudaMemcpyDeviceToHost);
+
+  
+  // TODO: Remove this logic
+  int32_t u,v;
+  int16_t d,d2;
+   
+  // for all point candidates in image 1 do
+  for (int32_t u_can=1; u_can<D_can_width; u_can++) {
+    u = u_can*D_candidate_stepsize;
+    for (int32_t v_can=1; v_can<D_can_height; v_can++) {
+      v = v_can*D_candidate_stepsize;
+      
+      // initialize disparity candidate to invalid
+      *(D_can+getAddressOffsetImage(u_can,v_can,D_can_width)) = -1; //Find the current candidate location
+      
+      // find forwards
+      d = computeMatchingDisparity(u,v,I1_desc,I2_desc,false); //Left image
+      //If we have found a disparity in the left, check from the right to left disparity
+      if (d>=0) {
+        
+        // find backwards
+        d2 = computeMatchingDisparity(u-d,v,I1_desc,I2_desc,true);
+        //Check our error between the 2 disparity and that its below 2 pixel difference
+        if (d2>=0 && abs(d-d2)<=param.lr_threshold)
+            //TODO: Use average of the two? Why only the left?
+          *(D_can+getAddressOffsetImage(u_can,v_can,D_can_width)) = d; //Save disparity 
+      }
+    }
+  }
+
+
+  // TODO: Make this a kernel
+  // Remove inconsistent support points
+  removeInconsistentSupportPoints(D_can,D_can_width,D_can_height);
+
+  // TODO: Make this a kernel
+  // Remove support points on straight lines, since they are redundant
+  // this reduces the number of triangles a little bit and hence speeds up
+  // the triangulation process
+  removeRedundantSupportPoints(D_can,D_can_width,D_can_height,5,1,true);
+  removeRedundantSupportPoints(D_can,D_can_width,D_can_height,5,1,false);
+  
+  // Move support points from image representation into a vector representation
+  vector<support_pt> p_support;
+  for (int32_t u_can=1; u_can<D_can_width; u_can++)
+    for (int32_t v_can=1; v_can<D_can_height; v_can++)
+      if (*(D_can+getAddressOffsetImage(u_can,v_can,D_can_width))>=0)
+        p_support.push_back(support_pt(u_can*D_candidate_stepsize,
+                                       v_can*D_candidate_stepsize,
+                                       *(D_can+getAddressOffsetImage(u_can,v_can,D_can_width))));
+  
+  // if flag is set, add support points in image corners
+  // with the same disparity as the nearest neighbor support point
+  if (param.add_corners)
+    addCornerSupportPoints(p_support);
+
+  // free memory
+  free(D_can);
+  
+  // return support point vector
+  return p_support;
+
+}
+
+
+
+
+
 __device__ uint32_t getAddressOffsetImage_GPU (const int32_t& u,const int32_t& v,const int32_t& width) {
   return v*width+u;
 }
@@ -126,155 +435,6 @@ __global__ void findMatch_GPU(int32_t* u_vals, int32_t* v_vals, int32_t size_tot
   if (min_d>=0) *(D+d_addr) = min_d; // MAP value (min neg-Log probability)
   else          *(D+d_addr) = -1;    // invalid disparity
 }
-
-// implements approximation to 8x8 bilateral filtering
-__global__ void adaptiveMeanGPU8 (float* D, int32_t D_width, int32_t D_height) {
-  
-  // Global coordinates and Pixel id
-  uint32_t u0 = blockDim.x*blockIdx.x + threadIdx.x + 4;
-  uint32_t v0 = blockDim.y*blockIdx.y + threadIdx.y + 4;
-  uint32_t idx = v0*D_width + u0;
-  //Local thread coordinates
-  uint32_t ut = threadIdx.x + 4;
-  uint32_t vt = threadIdx.y + 4;
-  
-  //If out of filter range return instantly
-  if(u0 > (D_width - 4) || v0 > (D_height - 4))
-    return;
-
-  //Allocate Shared memory array with an appropiate margin for the bitlateral filter
-  //Since we are using 8 pixels with the center pixel being 5,
-  //we need 4 extra on left and top and 3 extra on right and bottom
-  __shared__ float D_shared[32+7][32+7];
-  //Populate shared memory
-  if(threadIdx.x == blockDim.x-1){
-      D_shared[ut+1][vt] = D[idx+1];
-      D_shared[ut+2][vt] = D[idx+2];
-      D_shared[ut+3][vt] = D[idx+3];
-      //D_shared[ut+4][vt] = D[idx+4];
-  }
-  if(threadIdx.x == 0){
-      D_shared[ut-4][vt] = D[idx-4];
-      D_shared[ut-3][vt] = D[idx-3];
-      D_shared[ut-2][vt] = D[idx-2];
-      D_shared[ut-1][vt] = D[idx-1];
-  }
-  if(threadIdx.y == 0){
-      D_shared[ut][vt-4] = D[(v0-4)*D_width+u0];
-      D_shared[ut][vt-3] = D[(v0-3)*D_width+u0];
-      D_shared[ut][vt-2] = D[(v0-2)*D_width+u0];
-      D_shared[ut][vt-1] = D[(v0-1)*D_width+u0];
-  }
-  if(threadIdx.y == blockDim.y-1){
-      D_shared[ut][vt+1] = D[(v0+1)*D_width+u0];
-      D_shared[ut][vt+2] = D[(v0+2)*D_width+u0];
-      D_shared[ut][vt+3] = D[(v0+3)*D_width+u0];
-      //D_shared[ut][vt+4] = D[(v0+4)*D_width+u0];
-  }
-
-  if(D[idx] < 0){
-      // zero input disparity maps to -10 (this makes the bilateral
-      // weights of all valid disparities to 0 in this region)
-      D_shared[ut][vt] = -10;
-  }else{
-      D_shared[ut][vt] = D[idx];
-  }
-  __syncthreads();
-      
-  // full resolution: 8 pixel bilateral filter width
-  // D(x) = sum(I(xi)*f(I(xi)-I(x))*g(xi-x))/W(x)
-  // W(x) = sum(f(I(xi)-I(x))*g(xi-x))
-  // g(xi-x) = 1
-  // f(I(xi)-I(x)) = 4-|I(xi)-I(x)| if greater than 0, 0 otherwise
-  // horizontal filter
-
-  // Current pixel being filtered is middle of our set (4 back, in orginal its 3 for some reason)
-  //Note this isn't truely the center since original uses 8 vectore resisters
-  float val_curr = D_shared[ut][vt];
-
-  float weight_sum0 = 0;
-  float weight_sum = 0;
-  float factor_sum = 0;
-
-  for(int32_t i=0; i < 8; i++){
-    weight_sum0 = 4.0f - fabs(D_shared[ut+(i-4)][vt]-val_curr);
-    weight_sum0 = max(0.0f, weight_sum0);
-    weight_sum += weight_sum0;
-    factor_sum += D_shared[ut+(i-4)][vt]*weight_sum0;
-  }
-
-  if (weight_sum>0) {
-      float d = factor_sum/weight_sum;
-      if (d>=0) *(D+idx) = d;
-  }
-  
-  __syncthreads();
-  //Update shared memory
-  if(threadIdx.x == blockDim.x-1){
-      D_shared[ut+1][vt] = D[idx+1];
-      D_shared[ut+2][vt] = D[idx+2];
-      D_shared[ut+3][vt] = D[idx+3];
-      //D_shared[ut+4][vt] = D[idx+4];
-  }
-  if(threadIdx.x == 0){
-      D_shared[ut-4][vt] = D[idx-4];
-      D_shared[ut-3][vt] = D[idx-3];
-      D_shared[ut-2][vt] = D[idx-2];
-      D_shared[ut-1][vt] = D[idx-1];
-  }
-  if(threadIdx.y == 0){
-      D_shared[ut][vt-4] = D[(v0-4)*D_width+u0];
-      D_shared[ut][vt-3] = D[(v0-3)*D_width+u0];
-      D_shared[ut][vt-2] = D[(v0-2)*D_width+u0];
-      D_shared[ut][vt-1] = D[(v0-1)*D_width+u0];
-  }
-  if(threadIdx.y == blockDim.y-1){
-      D_shared[ut][vt+1] = D[(v0+1)*D_width+u0];
-      D_shared[ut][vt+2] = D[(v0+2)*D_width+u0];
-      D_shared[ut][vt+3] = D[(v0+3)*D_width+u0];
-      //D_shared[ut][vt+4] = D[(v0+4)*D_width+u0];
-  }
-
-  if(D[idx] < 0){
-      D_shared[ut][vt] = -10;
-  }else{
-      D_shared[ut][vt] = D[idx];
-  }
-
-  __syncthreads();
-
-  // vertical filter
-  // set pixel of interest
-  val_curr = D_shared[ut][vt];
-
-  weight_sum0 = 0;
-  weight_sum = 0;
-  factor_sum = 0;
-
-  for(int32_t i=0; i < 8; i++){
-    weight_sum0 = 4.0f - fabs(D_shared[ut][vt+(i-4)]-val_curr);
-    weight_sum0 = max(0.0f, weight_sum0);
-    weight_sum += weight_sum0;
-    factor_sum += D_shared[ut][vt+(i-4)]*weight_sum0;
-  }
-
-  if (weight_sum>0) {
-      float d = factor_sum/weight_sum;
-      if (d>=0) *(D+idx) = d;
-  }
-
-}
-
-/*
-* Computes the disparity for each support point candidate 
-* Removes outlier and redundant support points
-*/
-// vector<Elas::support_pt> ElasGPU::computeSupportMatches(uint8_t* I1_desc,uint8_t* I2_desc) {
-
-//   // For now call super
-//   return computeSupportMatches(I1_desc,I2_desc);
-
-// }
 
 /**
  * This is the core method that computes the disparity of the image
@@ -549,6 +709,144 @@ void ElasGPU::computeDisparity(std::vector<support_pt> p_support, std::vector<tr
   cudaFree(d_grid_dims);
   cudaFree(d_u_vals);
   cudaFree(d_v_vals);
+
+}
+
+// implements approximation to 8x8 bilateral filtering
+__global__ void adaptiveMeanGPU8 (float* D, int32_t D_width, int32_t D_height) {
+  
+  // Global coordinates and Pixel id
+  uint32_t u0 = blockDim.x*blockIdx.x + threadIdx.x + 4;
+  uint32_t v0 = blockDim.y*blockIdx.y + threadIdx.y + 4;
+  uint32_t idx = v0*D_width + u0;
+  //Local thread coordinates
+  uint32_t ut = threadIdx.x + 4;
+  uint32_t vt = threadIdx.y + 4;
+  
+  //If out of filter range return instantly
+  if(u0 > (D_width - 4) || v0 > (D_height - 4))
+    return;
+
+  //Allocate Shared memory array with an appropiate margin for the bitlateral filter
+  //Since we are using 8 pixels with the center pixel being 5,
+  //we need 4 extra on left and top and 3 extra on right and bottom
+  __shared__ float D_shared[32+7][32+7];
+  //Populate shared memory
+  if(threadIdx.x == blockDim.x-1){
+      D_shared[ut+1][vt] = D[idx+1];
+      D_shared[ut+2][vt] = D[idx+2];
+      D_shared[ut+3][vt] = D[idx+3];
+      //D_shared[ut+4][vt] = D[idx+4];
+  }
+  if(threadIdx.x == 0){
+      D_shared[ut-4][vt] = D[idx-4];
+      D_shared[ut-3][vt] = D[idx-3];
+      D_shared[ut-2][vt] = D[idx-2];
+      D_shared[ut-1][vt] = D[idx-1];
+  }
+  if(threadIdx.y == 0){
+      D_shared[ut][vt-4] = D[(v0-4)*D_width+u0];
+      D_shared[ut][vt-3] = D[(v0-3)*D_width+u0];
+      D_shared[ut][vt-2] = D[(v0-2)*D_width+u0];
+      D_shared[ut][vt-1] = D[(v0-1)*D_width+u0];
+  }
+  if(threadIdx.y == blockDim.y-1){
+      D_shared[ut][vt+1] = D[(v0+1)*D_width+u0];
+      D_shared[ut][vt+2] = D[(v0+2)*D_width+u0];
+      D_shared[ut][vt+3] = D[(v0+3)*D_width+u0];
+      //D_shared[ut][vt+4] = D[(v0+4)*D_width+u0];
+  }
+
+  if(D[idx] < 0){
+      // zero input disparity maps to -10 (this makes the bilateral
+      // weights of all valid disparities to 0 in this region)
+      D_shared[ut][vt] = -10;
+  }else{
+      D_shared[ut][vt] = D[idx];
+  }
+  __syncthreads();
+      
+  // full resolution: 8 pixel bilateral filter width
+  // D(x) = sum(I(xi)*f(I(xi)-I(x))*g(xi-x))/W(x)
+  // W(x) = sum(f(I(xi)-I(x))*g(xi-x))
+  // g(xi-x) = 1
+  // f(I(xi)-I(x)) = 4-|I(xi)-I(x)| if greater than 0, 0 otherwise
+  // horizontal filter
+
+  // Current pixel being filtered is middle of our set (4 back, in orginal its 3 for some reason)
+  //Note this isn't truely the center since original uses 8 vectore resisters
+  float val_curr = D_shared[ut][vt];
+
+  float weight_sum0 = 0;
+  float weight_sum = 0;
+  float factor_sum = 0;
+
+  for(int32_t i=0; i < 8; i++){
+    weight_sum0 = 4.0f - fabs(D_shared[ut+(i-4)][vt]-val_curr);
+    weight_sum0 = max(0.0f, weight_sum0);
+    weight_sum += weight_sum0;
+    factor_sum += D_shared[ut+(i-4)][vt]*weight_sum0;
+  }
+
+  if (weight_sum>0) {
+      float d = factor_sum/weight_sum;
+      if (d>=0) *(D+idx) = d;
+  }
+  
+  __syncthreads();
+  //Update shared memory
+  if(threadIdx.x == blockDim.x-1){
+      D_shared[ut+1][vt] = D[idx+1];
+      D_shared[ut+2][vt] = D[idx+2];
+      D_shared[ut+3][vt] = D[idx+3];
+      //D_shared[ut+4][vt] = D[idx+4];
+  }
+  if(threadIdx.x == 0){
+      D_shared[ut-4][vt] = D[idx-4];
+      D_shared[ut-3][vt] = D[idx-3];
+      D_shared[ut-2][vt] = D[idx-2];
+      D_shared[ut-1][vt] = D[idx-1];
+  }
+  if(threadIdx.y == 0){
+      D_shared[ut][vt-4] = D[(v0-4)*D_width+u0];
+      D_shared[ut][vt-3] = D[(v0-3)*D_width+u0];
+      D_shared[ut][vt-2] = D[(v0-2)*D_width+u0];
+      D_shared[ut][vt-1] = D[(v0-1)*D_width+u0];
+  }
+  if(threadIdx.y == blockDim.y-1){
+      D_shared[ut][vt+1] = D[(v0+1)*D_width+u0];
+      D_shared[ut][vt+2] = D[(v0+2)*D_width+u0];
+      D_shared[ut][vt+3] = D[(v0+3)*D_width+u0];
+      //D_shared[ut][vt+4] = D[(v0+4)*D_width+u0];
+  }
+
+  if(D[idx] < 0){
+      D_shared[ut][vt] = -10;
+  }else{
+      D_shared[ut][vt] = D[idx];
+  }
+
+  __syncthreads();
+
+  // vertical filter
+  // set pixel of interest
+  val_curr = D_shared[ut][vt];
+
+  weight_sum0 = 0;
+  weight_sum = 0;
+  factor_sum = 0;
+
+  for(int32_t i=0; i < 8; i++){
+    weight_sum0 = 4.0f - fabs(D_shared[ut][vt+(i-4)]-val_curr);
+    weight_sum0 = max(0.0f, weight_sum0);
+    weight_sum += weight_sum0;
+    factor_sum += D_shared[ut][vt+(i-4)]*weight_sum0;
+  }
+
+  if (weight_sum>0) {
+      float d = factor_sum/weight_sum;
+      if (d>=0) *(D+idx) = d;
+  }
 
 }
 
