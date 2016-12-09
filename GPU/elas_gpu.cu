@@ -67,8 +67,10 @@ __global__ void computeMatchingDisparity_GPU(uint8_t* I1_desc, uint8_t* I2_desc,
     for (int32_t i=0; i<16; i++)
       sum += abs((int32_t)(*(I1_block_addr+i))-128); //TODO: Why subtract 128
     //If our candidate had a texture below a threshold (Aka not a line) dont use it
-    if (sum<support_texture) 
+    if (sum<support_texture) {
+      *(D_can+getAddressOffsetImage_GPU(u_can,v_can,D_can_width)) = -1;
       return;
+    }
 
     // declare match energy for each disparity
     int32_t u_warp;
@@ -87,8 +89,10 @@ __global__ void computeMatchingDisparity_GPU(uint8_t* I1_desc, uint8_t* I2_desc,
     else              disp_max_valid = min(disp_max,width-u-window_size-u_step);
     
     // assume, that we can compute at least 10 disparities for this pixel
-    if (disp_max_valid-disp_min_valid<10)
+    if (disp_max_valid-disp_min_valid<10) {
+      *(D_can+getAddressOffsetImage_GPU(u_can,v_can,D_can_width)) = -1;
       return;
+    }
 
     // for all disparities do
     // Interate through our disparity values (at least 10)
@@ -139,13 +143,20 @@ __global__ void computeMatchingDisparity_GPU(uint8_t* I1_desc, uint8_t* I2_desc,
     // check if best and second best match are available and if matching ratio is sufficient
     // Threshold says the second is within the 95th percentile of the first
     if (min_1_d>=0 && min_2_d>=0 && (float)min_1_E<support_threshold*(float)min_2_E) {
-      printf("setting disparity = %d\n", min_1_d);
+      // printf("setting disparity = %d\n", min_1_d);
       *(D_can+getAddressOffsetImage_GPU(u_can,v_can,D_can_width)) = min_1_d;
     }
-    else
+    else {
+      // printf("not-setting disparity = %d | %d | %d | %d \n", min_1_d, min_2_d, min_1_E, support_threshold*(float)min_2_E);
       *(D_can+getAddressOffsetImage_GPU(u_can,v_can,D_can_width)) = -1;
+    }
 
+
+  } else {
+    *(D_can+getAddressOffsetImage_GPU(u_can,v_can,D_can_width)) = -1;
   }
+
+
 
 }
 
@@ -318,7 +329,7 @@ vector<Elas::support_pt> ElasGPU::computeSupportMatches(uint8_t* I1_desc,uint8_t
   for (int32_t v=0; v<height; v+=D_candidate_stepsize) D_can_height++; //Determine number of candidates at the stepsize in the vertical  
   
   // Calculate size of kernel
-  int block_width = 32;
+  int block_width = 16;
   int block_height = block_width;
   int grid_width, grid_height;
 
@@ -335,9 +346,27 @@ vector<Elas::support_pt> ElasGPU::computeSupportMatches(uint8_t* I1_desc,uint8_t
       grid_height = ceil(D_can_height/block_height); + 1;
   }
 
+
+  // cout << "D_can_height = " << D_can_height << endl;
+  // cout << "D_can_width = " << D_can_width << endl;
+  // cout << "block_width = " << block_width << endl;
+  // cout << "block_height = " << block_height << endl;
+  // cout << "grid_width = " << grid_width << endl;
+  // cout << "grid_height = " << grid_height << endl;
+
    // Create size objects
   dim3 DimGrid(grid_width,grid_height,1);
   dim3 DimBlock(block_width,block_height,1);
+
+  // Create two streams to the GPU
+  cudaStream_t streams[2];
+  cudaStreamCreate(&streams[0]);
+  cudaStreamCreate(&streams[1]);
+
+
+  // Local disparity grids
+  int16_t* D_can_1 = (int16_t*)calloc(D_can_width*D_can_height,sizeof(int16_t));
+  int16_t* D_can_2 = (int16_t*)calloc(D_can_width*D_can_height,sizeof(int16_t));
 
   // CUDA copy over needed memory information
   // candidate disparity grid, and image descriptors
@@ -353,31 +382,31 @@ vector<Elas::support_pt> ElasGPU::computeSupportMatches(uint8_t* I1_desc,uint8_t
   // Now copy over data
   cudaMemcpy(d_I1, I1_desc, 16*width*height*sizeof(uint8_t), cudaMemcpyHostToDevice);
   cudaMemcpy(d_I2, I2_desc, 16*width*height*sizeof(uint8_t), cudaMemcpyHostToDevice);
-
-  // Create two streams to the GPU
-  cudaStream_t streams[2];
-  cudaStreamCreate(&streams[0]);
-  cudaStreamCreate(&streams[1]);
+  // cudaMemcpyAsync(d_D_can_LR, D_can_1, D_can_width*D_can_height*sizeof(int16_t), cudaMemcpyHostToDevice, streams[0]);
+  // cudaMemcpyAsync(d_D_can_RL, D_can_2, D_can_width*D_can_height*sizeof(int16_t), cudaMemcpyHostToDevice, streams[1]);
 
   // KERNEL: Compute disparities left to right
-  computeMatchingDisparity_GPU<<<DimGrid,DimBlock,0,streams[0]>>>(d_I1, d_I2, width, height,
+  computeMatchingDisparity_GPU<<<DimGrid,DimBlock,0>>>(d_I1, d_I2, width, height,
                                                                   d_D_can_LR, D_candidate_stepsize, D_can_width,
                                                                   D_can_height, false);
 
   // KERNEL: Compute disparities right to left
-  computeMatchingDisparity_GPU<<<DimGrid,DimBlock,0,streams[1]>>>(d_I1, d_I2, width, height,
+  computeMatchingDisparity_GPU<<<DimGrid,DimBlock,0>>>(d_I1, d_I2, width, height,
                                                                   d_D_can_RL, D_candidate_stepsize, D_can_width,
                                                                   D_can_height, true);
 
   // Copy the final disparity candidate values back over
-  int16_t* D_can_1 = (int16_t*)calloc(D_can_width*D_can_height,sizeof(int16_t));
-  int16_t* D_can_2 = (int16_t*)calloc(D_can_width*D_can_height,sizeof(int16_t));
-  cudaMemcpyAsync(D_can_1, d_D_can_LR, width*height*sizeof(float), cudaMemcpyDeviceToHost, streams[0]);
-  cudaMemcpyAsync(D_can_2, d_D_can_RL, width*height*sizeof(float), cudaMemcpyDeviceToHost, streams[1]);
+  // cudaMemcpyAsync(D_can_1, d_D_can_LR, D_can_width*D_can_height*sizeof(int16_t), cudaMemcpyDeviceToHost, streams[0]);
+  cudaMemcpy(D_can_1, d_D_can_LR, D_can_width*D_can_height*sizeof(int16_t), cudaMemcpyDeviceToHost);
+  // cudaMemcpyAsync(D_can_2, d_D_can_RL, D_can_width*D_can_height*sizeof(int16_t), cudaMemcpyDeviceToHost, streams[1]);
+  cudaMemcpy(D_can_2, d_D_can_RL, D_can_width*D_can_height*sizeof(int16_t), cudaMemcpyDeviceToHost);
 
   // Sync after the kernel is launched
   // Ensures we have copied this data back to the host
-  cudaDeviceSynchronize();
+  cudaError_t cudaerr = cudaDeviceSynchronize();
+  if(cudaerr != cudaSuccess) printf("kernel launch failed with error \"%s\".\n", cudaGetErrorString(cudaerr));
+  cudaError_t error = cudaGetLastError();
+  if(error != cudaSuccess) printf("kernel launch failed with error \"%s\".\n", cudaGetErrorString(error));
 
   // TODO: Remove this logic, this is here so we can call the other methods
   int16_t* D_can = (int16_t*)calloc(D_can_width*D_can_height,sizeof(int16_t));
@@ -388,9 +417,10 @@ vector<Elas::support_pt> ElasGPU::computeSupportMatches(uint8_t* I1_desc,uint8_t
       int16_t d2 = *(D_can_2+getAddressOffsetImage(u_can,v_can,D_can_width));
       // Compare their values
       if (d1>0 && d2>0 && abs(d1-d2)<=param.lr_threshold) {
-        cout << "setting (" << u_can << ", " << v_can << ") = " << d1 << endl;
+        // cout << "setting (" << u_can << ", " << v_can << ") = " << d1 << endl;
         *(D_can+getAddressOffsetImage(u_can,v_can,D_can_width)) = d1;
       } else {
+        //cout << "not-setting (" << u_can << ", " << v_can << ") = " << d1 << endl;
         *(D_can+getAddressOffsetImage(u_can,v_can,D_can_width)) = -1;
       }
     }
