@@ -150,17 +150,12 @@ __global__ void adaptiveMeanGPU8 (float* D, float* D_copy, float* D_horiz, int32
 
   __syncthreads();
       
-  float *val = new float[8];
   // full resolution: 8 pixel bilateral filter width
-  // D(x) = sum(I(x)*f(I(xi)-I(x))*g(xi-x))/W(x)
+  // D(x) = sum(I(xi)*f(I(xi)-I(x))*g(xi-x))/W(x)
   // W(x) = sum(f(I(xi)-I(x))*g(xi-x))
   // g(xi-x) = 1
   // f(I(xi)-I(x)) = 4-|I(xi)-I(x)| if greater than 0, 0 otherwise
   // horizontal filter
-
-  // Preload first 8 pixels in row
-  for (int32_t u=0; u<8; u++)
-    val[u] = *(D_copy+idx+(u-4));
 
 
   // Current pixel being filtered is middle of our set (4 back, in orginal its 3 for some reason)
@@ -172,10 +167,10 @@ __global__ void adaptiveMeanGPU8 (float* D, float* D_copy, float* D_horiz, int32
   float factor_sum = 0;
 
   for(int32_t i=0; i < 8; i++){
-    weight_sum0 = 4.0f - fabs(val[i]-val_curr);
+    weight_sum0 = 4.0f - fabs(*(D_copy+idx+(i-4))-val_curr);
     weight_sum0 = max(0.0f, weight_sum0);
     weight_sum += weight_sum0;
-    factor_sum += val[i]*weight_sum0;
+    factor_sum += *(D_copy+idx+(i-4))*weight_sum0;
   }
   
   if (weight_sum>0) {
@@ -186,9 +181,6 @@ __global__ void adaptiveMeanGPU8 (float* D, float* D_copy, float* D_horiz, int32
   __syncthreads();
 
   // vertical filter
-  for (int32_t v=0; v<8; v++)
-    val[v] = *(D_horiz+(v0+(v-4))*D_width+u0);
-
   // set pixel of interest
   val_curr = *(D_horiz+idx);
 
@@ -197,10 +189,10 @@ __global__ void adaptiveMeanGPU8 (float* D, float* D_copy, float* D_horiz, int32
   factor_sum = 0;
 
   for(int32_t i=0; i < 8; i++){
-    weight_sum0 = 4.0f - fabs(val[i]-val_curr);
+    weight_sum0 = 4.0f - fabs(*(D_horiz+(v0+(i-4))*D_width+u0)-val_curr);
     weight_sum0 = max(0.0f, weight_sum0);
     weight_sum += weight_sum0;
-    factor_sum += val[i]*weight_sum0;
+    factor_sum += *(D_horiz+(v0+(i-4))*D_width+u0)*weight_sum0;
   }
   
   if (weight_sum>0) {
@@ -208,7 +200,6 @@ __global__ void adaptiveMeanGPU8 (float* D, float* D_copy, float* D_horiz, int32
       if (d>=0) *(D+idx) = d;
   }
 
-  delete val;
 }
 
 /**
