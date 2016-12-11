@@ -4,6 +4,14 @@
 // Enable profiling
 #define PROFILE
 
+// Macro for checking cuda errors following a cuda launch or api call
+#define CUDA_CHECK_ERROR() { \
+ cudaError_t e = cudaGetLastError(); \
+ if(e!=cudaSuccess) { \
+   printf("Cuda Failure: %s:%d: '%s'\n",__FILE__,__LINE__,cudaGetErrorString(e)); \
+ } \
+}
+
 #include <algorithm>
 #include <math.h>
 #include <vector>
