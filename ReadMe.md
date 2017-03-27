@@ -1,4 +1,4 @@
-#libelas-gpu
+# libelas-gpu
 
 This is an implementation of the well known [libelas](http://www.cvlibs.net/software/libelas/)
 (LIBrary for Efficient LArge-scale Stereo matching) library for
